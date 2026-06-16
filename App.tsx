@@ -1,5 +1,6 @@
 ﻿import { StatusBar } from 'expo-status-bar';
 import { Audio } from 'expo-av';
+import * as Clipboard from 'expo-clipboard';
 import * as FileSystem from 'expo-file-system/legacy';
 import * as Haptics from 'expo-haptics';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -1004,10 +1005,10 @@ export default function App() {
   }
 
   function renderToday() {
-    const grownFlow = retrievalSections.thoughtFlows[0];
-    const thoughtFeedNotes = activityNotes.slice(0, 4);
-    const todayStoredCount = activityNotes.filter((note) => isSameLocalDay(note.created_at, new Date())).length;
-    const processingCount = activityNotes.filter((note) => isProcessingVoiceNote(note, voiceJobs[note.id])).length;
+    const todayNotes = activityNotes.filter((note) => isSameLocalDay(note.created_at, new Date()));
+    const thoughtFeedNotes = todayNotes.slice(0, 4);
+    const todayStoredCount = todayNotes.length;
+    const processingCount = todayNotes.filter((note) => isProcessingVoiceNote(note, voiceJobs[note.id])).length;
 
     return (
       <ScrollView contentContainerStyle={styles.scrollContent}>
@@ -1022,9 +1023,8 @@ export default function App() {
           <View style={styles.retrievalSectionHeader}>
             <View>
               <Text style={styles.sectionTitle}>오늘 남긴 생각</Text>
-              
             </View>
-            {activityNotes.length > 4 ? (
+            {todayNotes.length > 4 ? (
               <Pressable onPress={() => changeTab('archive')}>
                 <Text style={styles.linkButtonText}>전체보기</Text>
               </Pressable>
@@ -1036,7 +1036,7 @@ export default function App() {
                 key={note.id}
                 note={note}
                 voiceJob={voiceJobs[note.id]}
-                relatedCount={findRelatedNotes(note, feedNotes).length}
+                relatedCount={0}
                 onPress={() => openNote(note)}
                 onRetryVoice={() => retryVoiceTranscription(note)}
               />
@@ -1045,21 +1045,6 @@ export default function App() {
             <Text style={styles.empty}>아직 남긴 생각이 없어요. 마이크로 첫 생각을 남겨보세요.</Text>
           )}
         </View>
-
-        {grownFlow ? (
-          <Pressable style={styles.todayMainFlowCard} onPress={() => openThoughtFlow(grownFlow)}>
-            <Text style={styles.todayRetrievalKicker}>자라난 생각</Text>
-            <Text style={styles.todayMainFlowTitle} numberOfLines={2}>{grownFlow.title}</Text>
-            <Text style={styles.todayMainFlowMeta}>녹음/메모 {grownFlow.notes.length}개가 하나의 글로 이어졌어요</Text>
-          </Pressable>
-        ) : (
-          <View style={styles.todayGrownEmptyCard}>
-            <Text style={styles.todayRetrievalKicker}>자라난 생각</Text>
-            <Text style={styles.todayGrownEmptyTitle}>녹음이 쌓이면 하나의 글로 자라나요</Text>
-            <Text style={styles.todayGrownEmptyBody}>관련된 생각이 모이면 합친 메모 초안으로 보여드릴게요.</Text>
-          </View>
-        )}
-
       </ScrollView>
     );
   }
@@ -1167,7 +1152,7 @@ export default function App() {
             key={note.id}
             note={note}
             voiceJob={voiceJobs[note.id]}
-            relatedCount={findRelatedNotes(note, feedNotes).length}
+            relatedCount={0}
             onPress={() => openNote(note)}
             onRetryVoice={() => retryVoiceTranscription(note)}
           />
@@ -1185,18 +1170,15 @@ export default function App() {
         keyExtractor={(item) => item.id}
         contentContainerStyle={styles.noteList}
         ListEmptyComponent={<Text style={styles.empty}>{emptyText}</Text>}
-        renderItem={({ item }) => {
-          const relatedCount = findRelatedNotes(item, feedNotes).length;
-          return (
-            <NoteCard
-              note={item}
-              voiceJob={voiceJobs[item.id]}
-              relatedCount={relatedCount}
-              onPress={() => openNote(item)}
-              onRetryVoice={() => retryVoiceTranscription(item)}
-            />
-          );
-        }}
+        renderItem={({ item }) => (
+          <NoteCard
+            note={item}
+            voiceJob={voiceJobs[item.id]}
+            relatedCount={0}
+            onPress={() => openNote(item)}
+            onRetryVoice={() => retryVoiceTranscription(item)}
+          />
+        )}
       />
     );
   }
@@ -1456,20 +1438,12 @@ function NoteCard({
         </View>
         <Text style={styles.noteDate}>{formatDate(note.created_at)}</Text>
       </View>
-      <CopyableText
-        style={styles.noteTitle}
-        numberOfLines={2}
-        copyValue={note.ai_title || makeDraftTitle(note.raw_text)}
-      >
+      <Text style={styles.noteTitle} numberOfLines={2}>
         {note.ai_title || makeDraftTitle(note.raw_text)}
-      </CopyableText>
-      <CopyableText
-        style={styles.noteSummary}
-        numberOfLines={2}
-        copyValue={note.ai_summary || makeDraftSummary(note.raw_text)}
-      >
+      </Text>
+      <Text style={styles.noteSummary} numberOfLines={2}>
         {note.ai_summary || makeDraftSummary(note.raw_text)}
-      </CopyableText>
+      </Text>
       {relatedCount > 0 ? (
         <View style={styles.rediscoveryPill}>
           <Text style={styles.rediscoveryPillText}>↔ 이전 생각 {relatedCount}개와 이어져요</Text>
@@ -2215,6 +2189,11 @@ function CopyableText({
 async function copyTextWithFallback(value: string) {
   const text = value.trim();
   if (!text) return false;
+
+  if (Platform.OS !== 'web') {
+    await Clipboard.setStringAsync(text);
+    return true;
+  }
 
   const webClipboard = (globalThis as { navigator?: { clipboard?: { writeText?: (text: string) => Promise<void> } } }).navigator?.clipboard;
   if (webClipboard?.writeText) {
