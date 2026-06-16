@@ -1,0 +1,5261 @@
+﻿import { StatusBar } from 'expo-status-bar';
+import { Audio } from 'expo-av';
+import * as FileSystem from 'expo-file-system/legacy';
+import * as Haptics from 'expo-haptics';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import { decode } from 'base64-arraybuffer';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import type { ReactNode } from 'react';
+import {
+  ActivityIndicator,
+  AppState,
+  Alert,
+  Animated,
+  Dimensions,
+  FlatList,
+  KeyboardAvoidingView,
+  PanResponder,
+  Platform,
+  Pressable,
+  SafeAreaView,
+  ScrollView,
+  Share,
+  StyleSheet,
+  Text,
+  TextInput,
+  View,
+} from 'react-native';
+import type { Session } from '@supabase/supabase-js';
+
+import { createLocalNote, deleteLocalTrashNote, listCachedThoughtFlows, listLocalNotes, listLocalTrashNotes, listRecentLocalNotes, moveLocalNoteToTrash, readLocalKeyValue, replaceCachedThoughtFlows, replaceLocalNotes, restoreLocalTrashNote, searchLocalNotes, updateLocalNote, writeLocalKeyValue } from './src/lib/localNotes';
+import { isSupabaseConfigured, supabase } from './src/lib/supabase';
+import { Note, SourceType } from './src/types';
+
+const AUDIO_BUCKET = 'note-audio';
+const RETRIEVAL_FEEDBACK_KEY = 'idea-second-brain:retrieval-feedback';
+const COPY_FEEDBACK_MS = 1400;
+const ARCHIVE_FAST_PREVIEW_NOTES = 24;
+const THOUGHT_FLOW_FINGERPRINT_KEY = 'idea-second-brain:thought-flow-fingerprint:v1';
+const SCREEN_WIDTH = Dimensions.get('window').width;
+const AnimatedPressable = Animated.createAnimatedComponent(Pressable);
+
+
+type AppTab = 'today' | 'organized' | 'archive';
+type VoiceJobStatus = 'saving' | 'uploading' | 'transcribing' | 'done' | 'failed';
+type RetrievalFeedbackStatus = 'useful' | 'later' | 'hidden';
+type RetrievalFeedbackMap = Record<string, { status: RetrievalFeedbackStatus; updatedAt: string; usedCount: number }>;
+type ThoughtProfile = {
+  id: string;
+  rawText: string;
+  title: string;
+  summary: string;
+  keywords: string[];
+  intent: string;
+  problem: string;
+  situation: string;
+  reusePurpose: string;
+  decisionAxis: string;
+  emotion: string;
+  lifeArea: string;
+  memoryType: string;
+  createdAt: string;
+  lastViewedAt?: string | null;
+  lastSurfacedAt?: string | null;
+  surfacedCount: number;
+  usedCount: number;
+  hiddenCount: number;
+};
+type NoteMeaning = ThoughtProfile;
+type ConnectionScore = {
+  keywordScore: number;
+  intentScore: number;
+  problemScore: number;
+  reusePurposeScore: number;
+  decisionAxisScore: number;
+  recencyContextScore: number;
+  userFeedbackScore: number;
+  total: number;
+};
+type RelatedCandidate = {
+  note: Note;
+  score: number;
+  scoreBreakdown: ConnectionScore;
+  reasons: string[];
+  meaning: NoteMeaning;
+};
+type ThoughtFlowStatus = 'temporary' | 'saved' | 'expanded';
+type MergedThoughtDraft = {
+  id: string;
+  flowId: string;
+  title: string;
+  body: string;
+  judgmentSummary: string[];
+  sourceNoteIds: string[];
+  createdAt: string;
+  status: 'draft' | 'saved';
+};
+type ThoughtFlow = {
+  id: string;
+  status: ThoughtFlowStatus;
+  title: string;
+  noteIds: string[];
+  notes: Note[];
+  mergedDraft: MergedThoughtDraft;
+  synthesis: string;
+  sharedProblem: string;
+  whyNow: string;
+  nextQuestion: string;
+  createdAt: string;
+  updatedAt: string;
+  sharedIntent?: string;
+  sharedDecisionAxis?: string;
+  confidenceScore?: number;
+};
+type RetrievalCandidate = {
+  note: Note;
+  section: 'today' | 'connected' | 'buried' | 'recent';
+  surfaceReason: string;
+  recentConnection?: string;
+  useSuggestion: string;
+  connectedNote?: Note;
+  connectionReason?: string;
+};
+type VoiceJob = { status: VoiceJobStatus; message: string; error?: string };
+type AudioPlaybackState = { noteId: string; positionMs: number; durationMs: number; loading: boolean; paused: boolean };
+type CollectionSummary = {
+  id: string;
+  title: string;
+  description: string;
+  notes: Note[];
+};
+type ArchiveDateGroup = {
+  key: string;
+  title: string;
+  notes: Note[];
+};
+
+export default function App() {
+  const [session, setSession] = useState<Session | null>(null);
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [authLoading, setAuthLoading] = useState(false);
+  const [notes, setNotes] = useState<Note[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [recording, setRecording] = useState<Audio.Recording | null>(null);
+  const [activeTab, setActiveTab] = useState<AppTab>('today');
+  const [selectedNoteId, setSelectedNoteId] = useState<string | null>(null);
+  const [selectedNoteOverride, setSelectedNoteOverride] = useState<Note | null>(null);
+  const [selectedThoughtFlowId, setSelectedThoughtFlowId] = useState<string | null>(null);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [voiceJobs, setVoiceJobs] = useState<Record<string, VoiceJob>>({});
+  const [audioPlayback, setAudioPlayback] = useState<AudioPlaybackState | null>(null);
+  const [cachedThoughtFlows, setCachedThoughtFlows] = useState<ThoughtFlow[]>([]);
+  const [archivePreviewNotes, setArchivePreviewNotes] = useState<Note[]>([]);
+  const [archiveSearchResults, setArchiveSearchResults] = useState<Note[]>([]);
+  const [trashNotes, setTrashNotes] = useState<Note[]>([]);
+  const [showTrash, setShowTrash] = useState(false);
+  const [retrievalFeedback, setRetrievalFeedback] = useState<RetrievalFeedbackMap>({});
+  const [generatedDrafts, setGeneratedDrafts] = useState<Record<string, MergedThoughtDraft>>({});
+  const [draftGenerationState, setDraftGenerationState] = useState<Record<string, { loading: boolean; error?: string }>>({});
+  const [noteRewriteInFlightId, setNoteRewriteInFlightId] = useState<string | null>(null);
+  const migrationInFlightRef = useRef(false);
+  const routingInFlightRef = useRef(false);
+  const playbackSoundRef = useRef<Audio.Sound | null>(null);
+
+  const cloudMode = isSupabaseConfigured && supabase !== null;
+  const canUseCloud = cloudMode && !!session?.user;
+
+  const statusLabel = useMemo(() => {
+    if (!cloudMode) return '로컬 테스트 중';
+    if (!session) return '로그인이 필요합니다';
+    return '내 생각이 조용히 정리되는 중';
+  }, [cloudMode, session]);
+
+  const feedNotes = useMemo(() => notes.filter((note) => !note.parent_note_id), [notes]);
+  const activityNotes = useMemo(
+    () => [...notes].sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()),
+    [notes],
+  );
+  const filteredNotes = useMemo(() => filterNotes(activityNotes, searchQuery), [activityNotes, searchQuery]);
+  const archiveFastNotes = searchQuery.trim() ? archiveSearchResults : archivePreviewNotes;
+  const archiveSourceNotes = searchQuery.trim() ? archiveSearchResults : (archivePreviewNotes.length ? archivePreviewNotes : filteredNotes);
+  const archiveGroups = useMemo(() => groupNotesByDate(archiveSourceNotes), [archiveSourceNotes]);
+  const thoughtFlowFingerprint = useMemo(() => computeThoughtFlowFingerprint(feedNotes, retrievalFeedback), [feedNotes, retrievalFeedback]);
+  const retrievalSections = useMemo(() => buildRetrievalSections(feedNotes, retrievalFeedback), [feedNotes, retrievalFeedback]);
+  const visibleThoughtFlows = retrievalSections.thoughtFlows.length > 0 ? retrievalSections.thoughtFlows : cachedThoughtFlows;
+  const selectedThoughtFlow = useMemo(() => {
+    const flow = visibleThoughtFlows.find((item) => item.id === selectedThoughtFlowId) ?? null;
+    if (!flow) return null;
+    const generatedDraft = generatedDrafts[flow.id];
+    return generatedDraft ? { ...flow, mergedDraft: generatedDraft } : flow;
+  }, [visibleThoughtFlows, selectedThoughtFlowId, generatedDrafts]);
+  const selectedNote = useMemo(
+    () => selectedNoteOverride ?? notes.find((note) => note.id === selectedNoteId) ?? null,
+    [notes, selectedNoteId, selectedNoteOverride],
+  );
+  const selectedNoteLogs = useMemo(() => {
+    if (!selectedNote) return [];
+    const rootId = selectedNote.parent_note_id ?? selectedNote.id;
+    const root = notes.find((note) => note.id === rootId) ?? selectedNote;
+    return [root, ...notes.filter((note) => note.parent_note_id === rootId)]
+      .filter((note, index, all) => all.findIndex((item) => item.id === note.id) === index)
+      .sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
+  }, [notes, selectedNote]);
+
+  const loadNotes = useCallback(async () => {
+    setLoading(true);
+    try {
+      if (canUseCloud && supabase) {
+        const { data, error } = await supabase
+          .from('notes')
+          .select('*')
+          .order('created_at', { ascending: false });
+        if (error) throw error;
+        const activeRows = ((data ?? []) as Note[]).filter((note) => !note.deleted_at);
+        setNotes(activeRows);
+        void replaceLocalNotes(activeRows).catch(() => undefined);
+      } else {
+        setNotes(await listRecentLocalNotes(120));
+      }
+    } catch (error) {
+      showError('메모를 불러오지 못했어요', error);
+    } finally {
+      setLoading(false);
+    }
+  }, [canUseCloud]);
+
+  useEffect(() => {
+    if (!supabase) {
+      void loadNotes();
+      return;
+    }
+
+    supabase.auth.getSession().then(({ data }) => setSession(data.session));
+    const { data: listener } = supabase.auth.onAuthStateChange((_event, nextSession) => {
+      setSession(nextSession);
+    });
+
+    return () => listener.subscription.unsubscribe();
+  }, [loadNotes]);
+
+  useEffect(() => {
+    void loadNotes();
+  }, [loadNotes, session?.user?.id]);
+  useEffect(() => {
+    let cancelled = false;
+    if (activeTab !== 'organized') return;
+    Promise.all([listCachedThoughtFlows(), readLocalKeyValue<string>(THOUGHT_FLOW_FINGERPRINT_KEY)])
+      .then(([flows, storedFingerprint]) => {
+        if (cancelled) return;
+        if (storedFingerprint === thoughtFlowFingerprint && flows.length > 0) {
+          setCachedThoughtFlows(flows as ThoughtFlow[]);
+        }
+      })
+      .catch(() => {
+        // SQLite cache is a fast preview; computed flows below remain the source of truth.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [activeTab, thoughtFlowFingerprint]);
+
+  useEffect(() => {
+    if (retrievalSections.thoughtFlows.length === 0) return;
+    setCachedThoughtFlows(retrievalSections.thoughtFlows);
+    void Promise.all([
+      replaceCachedThoughtFlows(retrievalSections.thoughtFlows),
+      writeLocalKeyValue(THOUGHT_FLOW_FINGERPRINT_KEY, thoughtFlowFingerprint),
+    ]).catch(() => undefined);
+  }, [retrievalSections.thoughtFlows, thoughtFlowFingerprint]);
+
+  useEffect(() => {
+    let cancelled = false;
+    if (activeTab !== 'archive') return;
+    if (searchQuery.trim()) {
+      searchLocalNotes(searchQuery, 80).then((rows) => {
+        if (!cancelled) setArchiveSearchResults(rows);
+      }).catch(() => undefined);
+      return () => { cancelled = true; };
+    }
+    listRecentLocalNotes(ARCHIVE_FAST_PREVIEW_NOTES).then((rows) => {
+      if (!cancelled) setArchivePreviewNotes(rows);
+    }).catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [activeTab, searchQuery]);
+
+  useEffect(() => {
+    return () => {
+      void playbackSoundRef.current?.unloadAsync();
+    };
+  }, []);
+
+
+  useEffect(() => {
+    void loadRetrievalFeedback();
+  }, []);
+
+  useEffect(() => {
+    if (canUseCloud) {
+      void migrateLocalNotesToCloud();
+    }
+  }, [canUseCloud, session?.user?.id]);
+
+  useEffect(() => {
+    const subscription = AppState.addEventListener('change', (nextState) => {
+      if (nextState === 'background' || nextState === 'inactive') {
+        void routePendingNotes({ skipSelected: true });
+      }
+    });
+
+    return () => subscription.remove();
+  }, [notes, selectedNoteId, canUseCloud, session?.user?.id]);
+
+  async function signInWithPassword() {
+    if (!supabase) return;
+    const cleanEmail = email.trim();
+    if (!cleanEmail || !password) {
+      Alert.alert('입력 필요', '이메일과 비밀번호를 입력해주세요.');
+      return;
+    }
+
+    setAuthLoading(true);
+    try {
+      const { error } = await supabase.auth.signInWithPassword({
+        email: cleanEmail,
+        password,
+      });
+      if (error) throw error;
+      setPassword('');
+    } catch (error) {
+      showError('로그인 실패', error);
+    } finally {
+      setAuthLoading(false);
+    }
+  }
+
+  async function signUpWithPassword() {
+    if (!supabase) return;
+    const cleanEmail = email.trim();
+    if (!cleanEmail || !password) {
+      Alert.alert('입력 필요', '이메일과 비밀번호를 입력해주세요.');
+      return;
+    }
+    if (password.length < 6) {
+      Alert.alert('비밀번호 확인', '비밀번호는 6자 이상이어야 합니다.');
+      return;
+    }
+
+    setAuthLoading(true);
+    try {
+      const { data, error } = await supabase.auth.signUp({
+        email: cleanEmail,
+        password,
+      });
+      if (error) throw error;
+      if (!data.session) {
+        Alert.alert('가입됨', 'Supabase에서 Confirm email이 켜져 있으면 바로 로그인되지 않습니다. Confirm email을 끄고 다시 로그인해주세요.');
+      }
+      setPassword('');
+    } catch (error) {
+      showError('계정 만들기 실패', error);
+    } finally {
+      setAuthLoading(false);
+    }
+  }
+
+  async function migrateLocalNotesToCloud() {
+    if (!supabase || !session?.user || migrationInFlightRef.current) return;
+    migrationInFlightRef.current = true;
+
+    try {
+      const migrationKey = `idea-second-brain:migrated:${session.user.id}`;
+      const alreadyMigrated = await AsyncStorage.getItem(migrationKey);
+      if (alreadyMigrated) return;
+
+      const localNotes = await listLocalNotes();
+      if (localNotes.length === 0) {
+        await AsyncStorage.setItem(migrationKey, new Date().toISOString());
+        return;
+      }
+
+      const rows = localNotes.map((note) => ({
+        user_id: session.user.id,
+        raw_text: note.raw_text,
+        source_type: note.source_type,
+        audio_url: note.audio_url ?? null,
+        ai_title: note.ai_title ?? makeDraftTitle(note.raw_text),
+        ai_summary: note.ai_summary ?? makeDraftSummary(note.raw_text),
+        ai_tags: note.ai_tags ?? [],
+        created_at: note.created_at,
+      }));
+
+      const { error } = await supabase.from('notes').insert(rows);
+      if (error) throw error;
+      await AsyncStorage.setItem(migrationKey, new Date().toISOString());
+      await loadNotes();
+    } catch (error) {
+      showError('로컬 메모 이전 실패', error);
+    } finally {
+      migrationInFlightRef.current = false;
+    }
+  }
+
+  async function signOut() {
+    if (!supabase) return;
+    await supabase.auth.signOut();
+    setNotes(await listRecentLocalNotes(120));
+    setActiveTab('today');
+    setSelectedNoteId(null);
+  }
+
+  async function loadRetrievalFeedback() {
+    try {
+      const raw = await AsyncStorage.getItem(RETRIEVAL_FEEDBACK_KEY);
+      setRetrievalFeedback(raw ? JSON.parse(raw) as RetrievalFeedbackMap : {});
+    } catch {
+      setRetrievalFeedback({});
+    }
+  }
+
+  async function markRetrievalFeedback(noteId: string, status: RetrievalFeedbackStatus) {
+    const next: RetrievalFeedbackMap = {
+      ...retrievalFeedback,
+      [noteId]: {
+        status,
+        updatedAt: new Date().toISOString(),
+        usedCount: status === 'useful' ? (retrievalFeedback[noteId]?.usedCount ?? 0) + 1 : (retrievalFeedback[noteId]?.usedCount ?? 0),
+      },
+    };
+    setRetrievalFeedback(next);
+    await AsyncStorage.setItem(RETRIEVAL_FEEDBACK_KEY, JSON.stringify(next));
+  }
+
+  async function createNote(rawText: string, sourceType: SourceType, audioUrl?: string | null, audioDurationMs?: number | null): Promise<Note | null> {
+    const trimmed = rawText.trim();
+    if (!trimmed) return null;
+
+    setSaving(true);
+    try {
+      if (canUseCloud && supabase) {
+        const { data, error } = await supabase
+          .from('notes')
+          .insert({
+            user_id: session.user.id,
+            raw_text: trimmed,
+            source_type: sourceType,
+            audio_url: audioUrl ?? null,
+            local_audio_url: audioUrl && isLocalAudioUri(audioUrl) ? audioUrl : null,
+            audio_duration_ms: audioDurationMs ?? null,
+            ai_title: makeDraftTitle(trimmed),
+            ai_summary: makeDraftSummary(trimmed),
+            ai_tags: [],
+            routing_status: 'pending_review',
+          })
+          .select('*')
+          .single();
+        if (error) throw error;
+        const createdNote = data as Note;
+        setNotes((prev) => [createdNote, ...prev]);
+        return createdNote;
+      }
+
+      const note = await createLocalNote(trimmed, sourceType, audioUrl, { audioDurationMs });
+      setNotes((prev) => [note, ...prev]);
+      return note;
+    } catch (error) {
+      showError('메모 저장 실패', error);
+      return null;
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function startRecording() {
+    try {
+      const permission = await Audio.requestPermissionsAsync();
+      if (!permission.granted) {
+        Alert.alert('마이크 권한 필요', '음성 메모를 위해 마이크 권한을 허용해주세요.');
+        return;
+      }
+
+      await Audio.setAudioModeAsync({ allowsRecordingIOS: true, playsInSilentModeIOS: true });
+      const result = await Audio.Recording.createAsync(Audio.RecordingOptionsPresets.HIGH_QUALITY);
+      setRecording(result.recording);
+    } catch (error) {
+      showError('녹음 시작 실패', error);
+    }
+  }
+
+  async function stopRecording() {
+    if (!recording) return;
+    try {
+      await recording.stopAndUnloadAsync();
+      const status = await recording.getStatusAsync();
+      const uri = recording.getURI();
+      setRecording(null);
+      const note = await createNote('음성 메모를 저장하는 중입니다.', 'voice', uri, status.durationMillis ?? null);
+      if (note && uri && canUseCloud) {
+        setVoiceJob(note.id, 'saving', '음성을 저장하는 중');
+        await uploadAndTranscribeVoice(note.id, uri);
+      } else if (note && !canUseCloud) {
+        setNotes((prev) =>
+          prev.map((item) =>
+            item.id === note.id
+              ? {
+                  ...item,
+                  ai_title: '음성 메모',
+                  ai_summary: '클라우드 로그인 후 STT 전사를 사용할 수 있어요.',
+                  ai_tags: ['음성'],
+                }
+              : item,
+          ),
+        );
+      }
+    } catch (error) {
+      setRecording(null);
+      showError('녹음 저장 실패', error);
+    }
+  }
+
+  async function updateNoteText(noteId: string, nextText: string) {
+    const trimmed = nextText.trim();
+    if (!trimmed) {
+      Alert.alert('내용 필요', '생각 원문을 비워둘 수는 없어요.');
+      return;
+    }
+
+    setSaving(true);
+    try {
+      const current = notes.find((note) => note.id === noteId);
+      const nextPatch = {
+        raw_text: trimmed,
+        ai_title: makeDraftTitle(trimmed),
+        ai_summary: makeDraftSummary(trimmed),
+        ai_tags: inferTagsFromText(trimmed, current?.source_type ?? 'text'),
+      };
+
+      if (canUseCloud && supabase) {
+        const { data, error } = await supabase
+          .from('notes')
+          .update(nextPatch)
+          .eq('id', noteId)
+          .select('*')
+          .single();
+        if (error) throw error;
+        const updated = data as Note;
+        setNotes((prev) => prev.map((note) => (note.id === noteId ? updated : note)));
+        await routeNote(noteId);
+      } else {
+        const updated = await updateLocalNote(noteId, nextPatch);
+        setNotes((prev) => prev.map((note) => (note.id === noteId && updated ? updated : note)));
+      }
+    } catch (error) {
+      showError('생각 수정 실패', error);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function togglePinNote(noteId: string) {
+    if (!supabase || !session?.user) return;
+    const current = notes.find((note) => note.id === noteId);
+    if (!current) return;
+
+    setSaving(true);
+    try {
+      const { data, error } = await supabase
+        .from('notes')
+        .update({ is_pinned: !current.is_pinned })
+        .eq('id', noteId)
+        .select('*')
+        .single();
+      if (error) throw error;
+      const updated = data as Note;
+      setNotes((prev) => prev.map((note) => (note.id === noteId ? updated : note)));
+    } catch (error) {
+      showError('고정 상태 변경 실패', error);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function detachLogNote(log: Note) {
+    if (!supabase || !session?.user || !log.parent_note_id) return;
+
+    setSaving(true);
+    try {
+      const { data, error } = await supabase
+        .from('notes')
+        .update({
+          parent_note_id: null,
+          ai_thread_reason: '사용자가 기존 생각에서 분리했습니다.',
+          ai_thread_confidence: null,
+          routing_status: 'routed',
+          is_pinned: false,
+        })
+        .eq('id', log.id)
+        .select('*')
+        .single();
+      if (error) throw error;
+      const updated = data as Note;
+      setNotes((prev) => prev.map((note) => (note.id === log.id ? updated : note)));
+      await loadNotes();
+    } catch (error) {
+      showError('원문 분리 실패', error);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  function requestDeleteNote(note: Note) {
+    Alert.alert('휴지통으로 이동', '이 생각을 보관함에서 숨기고 휴지통으로 옮길까요?', [
+      { text: '취소', style: 'cancel' },
+      { text: '휴지통으로', style: 'destructive', onPress: () => void moveNoteToTrash(note) },
+    ]);
+  }
+
+  async function moveNoteToTrash(noteToTrash: Note) {
+    setSaving(true);
+    try {
+      const deletedAt = new Date().toISOString();
+      if (canUseCloud && supabase && !noteToTrash.id.startsWith('local-')) {
+        const { error } = await supabase.from('notes').update({ deleted_at: deletedAt }).eq('id', noteToTrash.id);
+        if (error) throw error;
+        await moveLocalNoteToTrash({ ...noteToTrash, deleted_at: deletedAt }).catch(() => undefined);
+      } else {
+        await moveLocalNoteToTrash(noteToTrash);
+      }
+      setNotes((prev) => prev.filter((note) => note.id !== noteToTrash.id));
+      setArchivePreviewNotes((prev) => prev.filter((note) => note.id !== noteToTrash.id));
+      setArchiveSearchResults((prev) => prev.filter((note) => note.id !== noteToTrash.id));
+      setSelectedNoteId(null);
+      setSelectedNoteOverride(null);
+      void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => undefined);
+    } catch (error) {
+      showError('휴지통 이동 실패', error);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function openTrash() {
+    setTrashNotes(await listLocalTrashNotes());
+    setShowTrash(true);
+  }
+
+  async function restoreTrashNote(noteId: string) {
+    const restored = await restoreLocalTrashNote(noteId);
+    if (!restored) return;
+    setTrashNotes((prev) => prev.filter((note) => note.id !== noteId));
+    setNotes((prev) => [restored, ...prev]);
+    setArchivePreviewNotes((prev) => [restored, ...prev].slice(0, ARCHIVE_FAST_PREVIEW_NOTES));
+  }
+
+  async function permanentlyDeleteTrashNote(noteId: string) {
+    await deleteLocalTrashNote(noteId);
+    setTrashNotes((prev) => prev.filter((note) => note.id !== noteId));
+  }
+
+  function setVoiceJob(noteId: string, status: VoiceJobStatus, message: string, error?: string) {
+    setVoiceJobs((prev) => ({ ...prev, [noteId]: { status, message, error } }));
+  }
+
+  async function retryVoiceTranscription(note: Note) {
+    if (!note.audio_url) {
+      Alert.alert('재시도 불가', '재시도할 음성 파일 정보가 없어요.');
+      return;
+    }
+
+    await uploadAndTranscribeVoice(note.id, note.audio_url);
+  }
+
+  async function resolvePlayableAudioUri(audioRef: string) {
+    if (isLocalAudioUri(audioRef) || audioRef.startsWith('http://') || audioRef.startsWith('https://')) return audioRef;
+    if (!supabase) return audioRef;
+    const { data, error } = await supabase.storage.from(AUDIO_BUCKET).createSignedUrl(audioRef, 60 * 10);
+    if (error) throw error;
+    return data.signedUrl;
+  }
+
+  async function playOriginalAudio(note: Note) {
+    const audioRef = note.local_audio_url ?? note.audio_url;
+    if (!audioRef) {
+      Alert.alert('재생 불가', '재생할 원본 음성 파일 정보가 없어요.');
+      return;
+    }
+
+    try {
+      if (audioPlayback?.noteId === note.id && playbackSoundRef.current && audioPlayback.paused) {
+        await playbackSoundRef.current.playAsync();
+        setAudioPlayback((prev) => (prev ? { ...prev, paused: false, loading: false } : prev));
+        return;
+      }
+
+      await playbackSoundRef.current?.unloadAsync();
+      playbackSoundRef.current = null;
+      setAudioPlayback({ noteId: note.id, positionMs: 0, durationMs: note.audio_duration_ms ?? 0, loading: true, paused: false });
+      await Audio.setAudioModeAsync({ allowsRecordingIOS: false, playsInSilentModeIOS: true, shouldDuckAndroid: true, playThroughEarpieceAndroid: false });
+      const uri = await resolvePlayableAudioUri(audioRef);
+      const { sound } = await Audio.Sound.createAsync({ uri }, { shouldPlay: true, progressUpdateIntervalMillis: 250 });
+      playbackSoundRef.current = sound;
+      sound.setOnPlaybackStatusUpdate((status) => {
+        if (!status.isLoaded) return;
+        setAudioPlayback({
+          noteId: note.id,
+          positionMs: status.positionMillis ?? 0,
+          durationMs: status.durationMillis ?? note.audio_duration_ms ?? 0,
+          loading: false,
+          paused: !status.isPlaying && !status.didJustFinish,
+        });
+        if (status.didJustFinish) {
+          void stopOriginalAudio();
+        }
+      });
+    } catch (error) {
+      setAudioPlayback(null);
+      showError('원본 음성 재생 실패', error);
+    }
+  }
+
+  async function pauseOriginalAudio() {
+    if (!playbackSoundRef.current) return;
+    await playbackSoundRef.current.pauseAsync();
+    setAudioPlayback((prev) => (prev ? { ...prev, paused: true, loading: false } : prev));
+  }
+
+  async function stopOriginalAudio() {
+    const sound = playbackSoundRef.current;
+    playbackSoundRef.current = null;
+    setAudioPlayback(null);
+    if (sound) {
+      await sound.stopAsync().catch(() => undefined);
+      await sound.unloadAsync().catch(() => undefined);
+    }
+  }
+
+  async function uploadAndTranscribeVoice(noteId: string, audioRef: string) {
+    if (!supabase || !session?.user) return;
+
+    let audioPath = audioRef;
+    try {
+      if (isLocalAudioUri(audioRef)) {
+        setVoiceJob(noteId, 'uploading', '음성을 안전하게 저장하는 중');
+        updateVoiceNoteProgress(noteId, {
+          raw_text: '음성 메모를 업로드하는 중입니다.',
+          ai_title: '음성 저장 중',
+          ai_summary: '녹음 파일을 안전하게 보관하고 있어요.',
+          ai_tags: ['음성'],
+        });
+
+        const extension = getAudioExtension(audioRef);
+        audioPath = `${session.user.id}/${noteId}.${extension}`;
+        const base64 = await FileSystem.readAsStringAsync(audioRef, {
+          encoding: FileSystem.EncodingType.Base64,
+        });
+        const audioBuffer = decode(base64);
+
+        const { error: uploadError } = await supabase.storage
+          .from(AUDIO_BUCKET)
+          .upload(audioPath, audioBuffer, {
+            contentType: contentTypeForExtension(extension),
+            upsert: true,
+          });
+        if (uploadError) throw uploadError;
+
+        await supabase.from('notes').update({ audio_url: audioPath }).eq('id', noteId);
+      }
+
+      setVoiceJob(noteId, 'transcribing', 'AI가 받아쓰는 중');
+      updateVoiceNoteProgress(noteId, {
+        raw_text: '음성 메모를 전사하는 중입니다.',
+        ai_title: 'AI 받아쓰기 중',
+        ai_summary: '잠시 후 원문과 요약으로 바뀝니다.',
+        ai_tags: ['음성'],
+        audio_url: audioPath,
+      });
+
+      const { data, error: functionError } = await supabase.functions.invoke('transcribe-note', {
+        body: { noteId, audioPath },
+      });
+      if (functionError) {
+        throw new Error(await describeFunctionError(functionError));
+      }
+
+      const result = data as { text?: string; ai_title?: string; ai_summary?: string; ai_tags?: string[]; error?: string } | null;
+      if (result?.error) throw new Error(result.error);
+
+      setVoiceJob(noteId, 'done', '전사 완료');
+      setNotes((prev) =>
+        prev.map((note) =>
+          note.id === noteId
+            ? {
+                ...note,
+                raw_text: result?.text ?? note.raw_text,
+                ai_title: result?.ai_title ?? note.ai_title,
+                ai_summary: result?.ai_summary ?? note.ai_summary,
+                ai_tags: result?.ai_tags ?? note.ai_tags,
+                audio_url: audioPath,
+              }
+            : note,
+        ),
+      );
+      await loadNotes();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      setVoiceJob(noteId, 'failed', '전사 실패 · 다시 시도 가능', message);
+      updateVoiceNoteProgress(noteId, {
+        ai_title: '음성 전사 실패',
+        ai_summary: '원본 음성은 보존했어요. 네트워크나 AI 응답 문제일 수 있으니 다시 시도해보세요.',
+        ai_tags: ['음성', '재시도'],
+        audio_url: audioPath,
+      });
+      showError('음성 전사 실패', error);
+    }
+  }
+
+  function updateVoiceNoteProgress(noteId: string, patch: Partial<Note>) {
+    setNotes((prev) => prev.map((note) => (note.id === noteId ? { ...note, ...patch } : note)));
+  }
+
+
+  async function routePendingNotes({ skipSelected }: { skipSelected: boolean }) {
+    if (!canUseCloud || !supabase || !session?.user || routingInFlightRef.current) return;
+
+    const pending = notes.filter(
+      (note) =>
+        note.routing_status === 'pending_review' &&
+        !note.parent_note_id &&
+        (!skipSelected || note.id !== selectedNoteId),
+    );
+    if (pending.length === 0) return;
+
+    routingInFlightRef.current = true;
+    try {
+      for (const note of pending) {
+        await routeNote(note.id, { quiet: true });
+      }
+    } finally {
+      routingInFlightRef.current = false;
+    }
+  }
+
+  function changeTab(nextTab: AppTab) {
+    setActiveTab(nextTab);
+    setSelectedNoteId(null);
+    if (nextTab !== 'today') {
+      void routePendingNotes({ skipSelected: false });
+    }
+  }
+
+  async function routeNote(noteId: string, options: { quiet?: boolean } = {}) {
+    if (!supabase || !session?.user) return;
+
+    try {
+      const { data, error } = await supabase.functions.invoke('route-note', {
+        body: { noteId },
+      });
+      if (error) {
+        throw new Error(await describeFunctionError(error));
+      }
+
+      const result = data as {
+        action?: 'append_to_existing' | 'create_new_thread' | 'already_attached';
+        note?: Note;
+        attached_note_id?: string;
+        error?: string;
+      } | null;
+      if (result?.error) throw new Error(result.error);
+
+      await loadNotes();
+    } catch (error) {
+      if (!options.quiet) {
+        showError('생각 라우팅 실패', error);
+      }
+      await organizeNote(noteId);
+    }
+  }
+
+  async function organizeNote(noteId: string) {
+    if (!supabase || !session?.user) return;
+
+    try {
+      const { data, error } = await supabase.functions.invoke('organize-note', {
+        body: { noteId },
+      });
+      if (error) {
+        throw new Error(await describeFunctionError(error));
+      }
+
+      const result = data as { note?: Note; title?: string; summary?: string; tags?: string[]; error?: string } | null;
+      if (result?.error) throw new Error(result.error);
+
+      if (result?.note) {
+        setNotes((prev) => prev.map((note) => (note.id === noteId ? result.note as Note : note)));
+        return;
+      }
+
+      setNotes((prev) =>
+        prev.map((note) =>
+          note.id === noteId
+            ? {
+                ...note,
+                ai_title: result?.title ?? note.ai_title,
+                ai_summary: result?.summary ?? note.ai_summary,
+                ai_tags: result?.tags ?? note.ai_tags,
+              }
+            : note,
+        ),
+      );
+    } catch (error) {
+      showError('AI 정리 실패', error);
+    }
+  }
+
+
+  async function generateMergedThoughtDraft(flow: ThoughtFlow) {
+    if (!supabase || !session?.user) {
+      Alert.alert('로그인 필요', 'AI로 합친 메모 초안을 만들려면 클라우드 로그인이 필요합니다.');
+      return;
+    }
+
+    setDraftGenerationState((prev) => ({ ...prev, [flow.id]: { loading: true } }));
+    try {
+      const sourceNotes = flow.notes.map((note) => ({
+        id: note.id,
+        title: note.ai_title || makeDraftTitle(note.raw_text),
+        rawText: note.raw_text,
+        createdAt: note.created_at,
+      }));
+      const { data, error } = await supabase.functions.invoke('generate-merged-thought-draft', {
+        body: {
+          flowId: flow.id,
+          title: flow.title,
+          notes: sourceNotes,
+        },
+      });
+      if (error) {
+        throw new Error(await describeFunctionError(error));
+      }
+
+      const result = data as { draft?: MergedThoughtDraft; error?: string } | null;
+      if (result?.error) throw new Error(result.error);
+      if (!result?.draft) throw new Error('합친 메모 초안 응답이 비어 있어요.');
+
+      setGeneratedDrafts((prev) => ({ ...prev, [flow.id]: result.draft as MergedThoughtDraft }));
+      setDraftGenerationState((prev) => ({ ...prev, [flow.id]: { loading: false } }));
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      setDraftGenerationState((prev) => ({ ...prev, [flow.id]: { loading: false, error: message } }));
+      showError('합친 메모 초안 생성 실패', error);
+    }
+  }
+
+
+  async function rewriteOriginalNote(note: Note) {
+    if (!supabase || !session?.user) {
+      Alert.alert('로그인 필요', 'AI로 원본 메모를 다시 정리하려면 클라우드 로그인이 필요합니다.');
+      return;
+    }
+    setNoteRewriteInFlightId(note.id);
+    try {
+      await organizeNote(note.id);
+    } finally {
+      setNoteRewriteInFlightId(null);
+    }
+  }
+
+  function renderLoginCard() {
+    return (
+      <View style={styles.card}>
+        <Text style={styles.cardTitle}>내 생각 공간 열기</Text>
+        <Text style={styles.helpText}>PC와 모바일에서 같은 생각 기록을 보려면 로그인해주세요.</Text>
+        <TextInput
+          style={styles.input}
+          autoCapitalize="none"
+          keyboardType="email-address"
+          placeholder="email@example.com"
+          value={email}
+          onChangeText={setEmail}
+        />
+        <TextInput
+          style={styles.input}
+          secureTextEntry
+          placeholder="비밀번호 6자 이상"
+          value={password}
+          onChangeText={setPassword}
+        />
+        <View style={styles.buttonRow}>
+          <Pressable
+            disabled={authLoading}
+            style={[styles.primaryButton, authLoading && styles.disabledButton]}
+            onPress={signInWithPassword}
+          >
+            <Text style={styles.primaryButtonText}>로그인</Text>
+          </Pressable>
+          <Pressable disabled={authLoading} style={styles.secondaryButton} onPress={signUpWithPassword}>
+            <Text style={styles.secondaryButtonText}>새 계정</Text>
+          </Pressable>
+        </View>
+      </View>
+    );
+  }
+
+  function renderToday() {
+    const grownFlow = retrievalSections.thoughtFlows[0];
+    const thoughtFeedNotes = activityNotes.slice(0, 4);
+    const todayStoredCount = activityNotes.filter((note) => isSameLocalDay(note.created_at, new Date())).length;
+    const processingCount = activityNotes.filter((note) => isProcessingVoiceNote(note, voiceJobs[note.id])).length;
+
+    return (
+      <ScrollView contentContainerStyle={styles.scrollContent}>
+        <TodayRecorderCard
+          recording={!!recording}
+          saving={saving}
+          onToggleRecording={recording ? stopRecording : startRecording}
+        />
+        <Text style={styles.todayInlineStatus}>오늘 {todayStoredCount}개 저장 · {processingCount}개 정리 중</Text>
+
+        <View style={styles.retrievalSection}>
+          <View style={styles.retrievalSectionHeader}>
+            <View>
+              <Text style={styles.sectionTitle}>오늘 남긴 생각</Text>
+              
+            </View>
+            {activityNotes.length > 4 ? (
+              <Pressable onPress={() => changeTab('archive')}>
+                <Text style={styles.linkButtonText}>전체보기</Text>
+              </Pressable>
+            ) : null}
+          </View>
+          {thoughtFeedNotes.length ? (
+            thoughtFeedNotes.map((note) => (
+              <NoteCard
+                key={note.id}
+                note={note}
+                voiceJob={voiceJobs[note.id]}
+                relatedCount={findRelatedNotes(note, feedNotes).length}
+                onPress={() => openNote(note)}
+                onRetryVoice={() => retryVoiceTranscription(note)}
+              />
+            ))
+          ) : (
+            <Text style={styles.empty}>아직 남긴 생각이 없어요. 마이크로 첫 생각을 남겨보세요.</Text>
+          )}
+        </View>
+
+        {grownFlow ? (
+          <Pressable style={styles.todayMainFlowCard} onPress={() => openThoughtFlow(grownFlow)}>
+            <Text style={styles.todayRetrievalKicker}>자라난 생각</Text>
+            <Text style={styles.todayMainFlowTitle} numberOfLines={2}>{grownFlow.title}</Text>
+            <Text style={styles.todayMainFlowMeta}>녹음/메모 {grownFlow.notes.length}개가 하나의 글로 이어졌어요</Text>
+          </Pressable>
+        ) : (
+          <View style={styles.todayGrownEmptyCard}>
+            <Text style={styles.todayRetrievalKicker}>자라난 생각</Text>
+            <Text style={styles.todayGrownEmptyTitle}>녹음이 쌓이면 하나의 글로 자라나요</Text>
+            <Text style={styles.todayGrownEmptyBody}>관련된 생각이 모이면 합친 메모 초안으로 보여드릴게요.</Text>
+          </View>
+        )}
+
+      </ScrollView>
+    );
+  }
+
+  function renderOrganized() {
+    return (
+      <ScrollView contentContainerStyle={styles.retrievalScrollContent}>
+        <View style={styles.pageIntro}>
+          <Text style={styles.sectionTitle}>자라난 생각</Text>
+          <Text style={styles.sectionHint}>흩어진 녹음이 읽을 만한 생각 정리 리포트로 자라나요.</Text>
+        </View>
+
+        <ThoughtFlowSection
+          flows={visibleThoughtFlows}
+          onOpenFlow={openThoughtFlow}
+          onOpenNote={openNote}
+          emptyText="아직 자라난 생각을 만들 만큼 이어진 메모가 부족해요. 메모를 조금 더 남기면 생각 리포트가 생겨요."
+        />
+      </ScrollView>
+    );
+  }
+
+  function renderArchive() {
+    const visibleArchiveGroups = archiveGroups;
+    if (searchQuery.trim()) {
+      return (
+        <View style={styles.tabContent}>
+          <View style={styles.searchCard}>
+            <TextInput
+              style={styles.searchInput}
+              placeholder="녹음, 원문, 제목을 검색해보세요"
+              value={searchQuery}
+              onChangeText={setSearchQuery}
+            />
+          </View>
+          <View style={styles.listHeader}>
+            <View>
+              <Text style={styles.sectionTitle}>검색 결과</Text>
+              <Text style={styles.sectionHint}>{archiveSearchResults.length || filteredNotes.length}개를 찾았어요</Text>
+            </View>
+          </View>
+          {renderNoteList(archiveSearchResults.length ? archiveSearchResults : filteredNotes, '검색 결과에 맞는 보관 메모가 없어요.')}
+        </View>
+      );
+    }
+
+    return (
+      <ScrollView contentContainerStyle={styles.retrievalScrollContent}>
+        <View style={styles.pageIntroRow}>
+          <View>
+            <Text style={styles.sectionTitle}>보관</Text>
+            <Text style={styles.sectionHint}>녹음과 원문 메모가 안전하게 남아 있는 곳이에요.</Text>
+          </View>
+          <Pressable style={styles.trashButton} onPress={openTrash}>
+            <Text style={styles.trashButtonText}>휴지통</Text>
+          </Pressable>
+        </View>
+        <View style={styles.searchCard}>
+          <Text style={styles.cardTitle}>필요할 때 검색</Text>
+          <TextInput
+            style={styles.searchInput}
+            placeholder="녹음, 원문, 정리된 제목을 검색"
+            value={searchQuery}
+            onChangeText={setSearchQuery}
+          />
+        </View>
+        {archivePreviewNotes.length ? <Text style={styles.archivePreviewHint}>최근 {Math.min(archivePreviewNotes.length, ARCHIVE_FAST_PREVIEW_NOTES)}개 먼저 보여주는 중</Text> : null}
+        {renderArchiveGroups(visibleArchiveGroups, '아직 보관된 녹음이나 메모가 없어요.')}
+      </ScrollView>
+    );
+  }
+
+  function openNote(note: Note) {
+    setSelectedNoteOverride(notes.some((item) => item.id === note.id) ? null : note);
+    setSelectedNoteId(note.id);
+  }
+
+  function openThoughtFlow(flow: ThoughtFlow) {
+    setSelectedNoteId(null);
+    setSelectedNoteOverride(null);
+    setSelectedThoughtFlowId(flow.id);
+  }
+
+  function closeThoughtFlowDetail() {
+    setSelectedThoughtFlowId(null);
+  }
+
+  function closeNoteDetail() {
+    setSelectedNoteId(null);
+    setSelectedNoteOverride(null);
+  }
+
+  function renderArchiveGroups(groups: ArchiveDateGroup[], emptyText: string) {
+    if (loading) return <ActivityIndicator style={styles.loader} />;
+    if (!groups.length) return <Text style={styles.empty}>{emptyText}</Text>;
+
+    return groups.map((group) => (
+      <View key={group.key} style={styles.archiveDateGroup}>
+        <View style={styles.archiveDateHeader}>
+          <Text style={styles.archiveDateTitle}>{group.title}</Text>
+          <Text style={styles.archiveDateCount}>{group.notes.length}개</Text>
+        </View>
+        {group.notes.map((note) => (
+          <NoteCard
+            key={note.id}
+            note={note}
+            voiceJob={voiceJobs[note.id]}
+            relatedCount={findRelatedNotes(note, feedNotes).length}
+            onPress={() => openNote(note)}
+            onRetryVoice={() => retryVoiceTranscription(note)}
+          />
+        ))}
+      </View>
+    ));
+  }
+
+  function renderNoteList(data: Note[], emptyText: string) {
+    if (loading) return <ActivityIndicator style={styles.loader} />;
+
+    return (
+      <FlatList
+        data={data}
+        keyExtractor={(item) => item.id}
+        contentContainerStyle={styles.noteList}
+        ListEmptyComponent={<Text style={styles.empty}>{emptyText}</Text>}
+        renderItem={({ item }) => {
+          const relatedCount = findRelatedNotes(item, feedNotes).length;
+          return (
+            <NoteCard
+              note={item}
+              voiceJob={voiceJobs[item.id]}
+              relatedCount={relatedCount}
+              onPress={() => openNote(item)}
+              onRetryVoice={() => retryVoiceTranscription(item)}
+            />
+          );
+        }}
+      />
+    );
+  }
+
+  function renderTabContent(tab: AppTab = activeTab) {
+    if (tab === 'organized') return renderOrganized();
+    if (tab === 'archive') return renderArchive();
+    return renderToday();
+  }
+
+  function renderPreviousScreenLayer() {
+    return (
+      <View pointerEvents="none" style={styles.previousScreenLayer}>
+        <View style={styles.previousScreenContent}>{renderTabContent(activeTab)}</View>
+      </View>
+    );
+  }
+
+  function renderActiveTab() {
+    if (showTrash) {
+      return (
+        <TrashScreen
+          notes={trashNotes}
+          onBack={() => setShowTrash(false)}
+          onRestore={restoreTrashNote}
+          onDeleteForever={(noteId) => {
+            Alert.alert('영구 삭제', '이 메모를 완전히 삭제할까요?', [
+              { text: '취소', style: 'cancel' },
+              { text: '영구 삭제', style: 'destructive', onPress: () => void permanentlyDeleteTrashNote(noteId) },
+            ]);
+          }}
+        />
+      );
+    }
+    if (selectedNote) {
+      return (
+        <View style={styles.navigationStack}>
+          {renderPreviousScreenLayer()}
+          <NoteDetail
+            note={selectedNote}
+            relatedNotes={findRelatedNotes(selectedNote, feedNotes)}
+            sourceLogs={selectedNoteLogs}
+            saving={saving}
+            voiceJob={voiceJobs[selectedNote.id]}
+            onBack={closeNoteDetail}
+            onSave={updateNoteText}
+            onDelete={requestDeleteNote}
+            onTogglePin={togglePinNote}
+            onDetachLog={detachLogNote}
+            playback={audioPlayback?.noteId === selectedNote.id ? audioPlayback : null}
+            onPlayVoice={playOriginalAudio}
+            onPauseVoice={pauseOriginalAudio}
+            onStopVoice={stopOriginalAudio}
+            onRetryVoice={retryVoiceTranscription}
+            onOpenRelated={openNote}
+            onRewriteNote={rewriteOriginalNote}
+            rewriting={noteRewriteInFlightId === selectedNote.id}
+          />
+        </View>
+      );
+    }
+    if (selectedThoughtFlow) {
+      return (
+        <View style={styles.navigationStack}>
+          {renderPreviousScreenLayer()}
+          <ThoughtFlowDetailScreen
+            flow={selectedThoughtFlow}
+            onBack={closeThoughtFlowDetail}
+            onOpenNote={openNote}
+            onRegenerateDraft={generateMergedThoughtDraft}
+            generationState={draftGenerationState[selectedThoughtFlow.id]}
+          />
+        </View>
+      );
+    }
+    return (
+      <View style={styles.tabPagerViewport}>
+        {renderTabContent(activeTab)}
+      </View>
+    );
+  }
+
+  const showAppChrome = !(cloudMode && !session);
+  const showFloatingCapture = false;
+
+  return (
+    <SafeAreaView style={styles.safeArea}>
+      <StatusBar style="dark" />
+      <KeyboardAvoidingView
+        style={styles.container}
+        behavior={Platform.select({ ios: 'padding', default: undefined })}
+      >
+        {cloudMode && !session ? (
+          <View style={styles.header}>
+            <Text style={styles.kicker}>Idea Second Brain</Text>
+            <Text style={styles.title}>생각을 잃어버리지 않는 메모장</Text>
+            <Text style={styles.status}>{statusLabel}</Text>
+          </View>
+        ) : null}
+
+        {cloudMode && !session ? renderLoginCard() : renderActiveTab()}
+
+        {showFloatingCapture ? (
+          <FloatingCaptureBar
+            recording={!!recording}
+            saving={saving}
+            onToggleRecording={recording ? stopRecording : startRecording}
+          />
+        ) : null}
+        {(cloudMode && !session) || selectedNote || selectedThoughtFlow || showTrash ? null : <BottomTabs activeTab={activeTab} onChange={changeTab} />}
+      </KeyboardAvoidingView>
+    </SafeAreaView>
+  );
+}
+
+
+function TrashScreen({
+  notes,
+  onBack,
+  onRestore,
+  onDeleteForever,
+}: {
+  notes: Note[];
+  onBack: () => void;
+  onRestore: (noteId: string) => void;
+  onDeleteForever: (noteId: string) => void;
+}) {
+  return (
+    <ScrollView contentContainerStyle={styles.detailContent}>
+      <View style={styles.detailShell}>
+        <AppBackButton onPress={onBack} label="보관으로" />
+        <Text style={styles.sectionTitle}>휴지통</Text>
+        <Text style={styles.sectionHint}>실수로 지운 생각을 복원하거나 완전히 삭제할 수 있어요.</Text>
+        {notes.length ? notes.map((note) => (
+          <View key={note.id} style={styles.trashNoteCard}>
+            <Text style={styles.relatedTitle}>{note.ai_title || makeDraftTitle(note.raw_text)}</Text>
+            <Text style={styles.noteSummary} numberOfLines={2}>{note.ai_summary || note.raw_text}</Text>
+            <View style={styles.buttonRow}>
+              <Pressable style={styles.secondaryButton} onPress={() => onRestore(note.id)}>
+                <Text style={styles.secondaryButtonText}>복원</Text>
+              </Pressable>
+              <Pressable style={styles.dangerButton} onPress={() => onDeleteForever(note.id)}>
+                <Text style={styles.dangerButtonText}>영구 삭제</Text>
+              </Pressable>
+            </View>
+          </View>
+        )) : <Text style={styles.empty}>휴지통이 비어 있어요.</Text>}
+      </View>
+    </ScrollView>
+  );
+}
+
+function FloatingCaptureBar({
+  recording,
+  saving,
+  onToggleRecording,
+}: {
+  recording: boolean;
+  saving: boolean;
+  onToggleRecording: () => void;
+}) {
+  return (
+    <View pointerEvents="box-none" style={styles.floatingCaptureWrap}>
+      <Pressable
+        style={[styles.floatingMicButton, recording && styles.floatingMicButtonActive]}
+        onPress={onToggleRecording}
+        disabled={saving}
+      >
+        <Text style={styles.floatingMicIcon}>{recording ? '■' : '🎙️'}</Text>
+      </Pressable>
+      <Text style={[styles.captureHint, recording && styles.captureHintActive]}>
+        {recording ? '듣는 중 · 다시 누르면 저장' : '생각을 말해보세요'}
+      </Text>
+    </View>
+  );
+}
+
+function TodayRecorderCard({
+  recording,
+  saving,
+  onToggleRecording,
+}: {
+  recording: boolean;
+  saving: boolean;
+  onToggleRecording: () => void;
+}) {
+  return (
+    <View style={[styles.todayRecorderCard, recording && styles.todayRecorderCardActive]}>
+      <View style={styles.todayMicHaloOuter}>
+        <View style={styles.todayMicHaloInner}>
+          <Text style={styles.todayMicIcon}>🎙️</Text>
+        </View>
+      </View>
+      <View style={styles.todayWaveformRow}>
+        {[8, 18, 13, 28, 12, 36, 14, 24, 11, 32, 15, 30].map((height, index) => (
+          <View key={`${height}-${index}`} style={[styles.todayWaveformBar, { height: recording ? height : Math.max(7, height * 0.5) }]} />
+        ))}
+      </View>
+      <Pressable
+        style={[styles.todayRecordButton, recording && styles.todayRecordButtonActive, saving && styles.disabledButton]}
+        onPress={onToggleRecording}
+        disabled={saving}
+      >
+        <Text style={styles.todayRecordButtonIcon}>{recording ? '■' : '●'}</Text>
+        <Text style={styles.todayRecordButtonText}>{recording ? '녹음 끝내고 저장' : '생각 말하기'}</Text>
+      </Pressable>
+    </View>
+  );
+}
+
+function BottomTabs({ activeTab, onChange }: { activeTab: AppTab; onChange: (tab: AppTab) => void }) {
+  const tabs: Array<{ id: AppTab; label: string; icon: string }> = [
+    { id: 'today', label: '오늘', icon: '✦' },
+    { id: 'organized', label: '생각', icon: '🌱' },
+    { id: 'archive', label: '보관', icon: '▤' }
+  ];
+
+  return (
+    <View style={styles.bottomTabs}>
+      {tabs.map((tab) => {
+        const isActive = activeTab === tab.id;
+        return (
+          <Pressable key={tab.id} style={[styles.tabButton, isActive && styles.tabButtonActive]} onPress={() => onChange(tab.id)}>
+            <Text style={[styles.tabIcon, isActive && styles.tabTextActive]}>{tab.icon}</Text>
+            <Text style={[styles.tabLabel, isActive && styles.tabTextActive]}>{tab.label}</Text>
+          </Pressable>
+        );
+      })}
+    </View>
+  );
+}
+
+function NoteCard({
+  note,
+  voiceJob,
+  relatedCount,
+  onPress,
+  onRetryVoice,
+}: {
+  note: Note;
+  voiceJob?: VoiceJob;
+  relatedCount: number;
+  onPress: () => void;
+  onRetryVoice: () => void;
+}) {
+  const isProcessing = voiceJob ? ['saving', 'uploading', 'transcribing'].includes(voiceJob.status) : note.raw_text.includes('전사하는 중입니다') || note.raw_text.includes('업로드하는 중입니다');
+  const isFailed = voiceJob?.status === 'failed' || note.ai_title?.includes('실패');
+  const category = inferCategory(note);
+  const replyCount = Math.max(0, (note.ai_thread_reason ? 1 : 0));
+
+  return (
+    <Pressable style={[styles.noteCard, isProcessing && styles.processingCard, isFailed && styles.failedCard]} onPress={onPress}>
+      <View style={styles.noteMetaRow}>
+        <View style={styles.noteMetaLeft}>
+          <Text style={styles.noteType}>{note.source_type === 'voice' ? '🎙' : '✎'}</Text>
+          <Text style={styles.singleCategory}>{category}</Text>
+        </View>
+        <Text style={styles.noteDate}>{formatDate(note.created_at)}</Text>
+      </View>
+      <CopyableText
+        style={styles.noteTitle}
+        numberOfLines={2}
+        copyValue={note.ai_title || makeDraftTitle(note.raw_text)}
+      >
+        {note.ai_title || makeDraftTitle(note.raw_text)}
+      </CopyableText>
+      <CopyableText
+        style={styles.noteSummary}
+        numberOfLines={2}
+        copyValue={note.ai_summary || makeDraftSummary(note.raw_text)}
+      >
+        {note.ai_summary || makeDraftSummary(note.raw_text)}
+      </CopyableText>
+      {relatedCount > 0 ? (
+        <View style={styles.rediscoveryPill}>
+          <Text style={styles.rediscoveryPillText}>↔ 이전 생각 {relatedCount}개와 이어져요</Text>
+        </View>
+      ) : null}
+      <View style={styles.compactMetaRow}>
+        {note.audio_url ? <Text style={styles.iconMeta}>◉</Text> : null}
+        {replyCount > 0 ? <Text style={styles.iconMeta}>💬 {replyCount}</Text> : null}
+        <RoutingBadge note={note} compact />
+      </View>
+      {voiceJob && voiceJob.status !== 'done' ? (
+        <View style={styles.voiceStatusBox}>
+          <Text style={styles.voiceStatusText}>{voiceJob.message}</Text>
+          {voiceJob.status === 'failed' ? (
+            <Pressable style={styles.retryButton} onPress={onRetryVoice}>
+              <Text style={styles.retryButtonText}>다시 전사</Text>
+            </Pressable>
+          ) : null}
+        </View>
+      ) : null}
+    </Pressable>
+  );
+}
+
+
+function ThoughtFlowSection({
+  flows,
+  onOpenFlow,
+  onOpenNote,
+  title = '자라난 생각 카드',
+  hint = '관련된 녹음이 하나의 생각 정리 리포트로 자라는 장면이에요.',
+  emptyText,
+}: {
+  flows: ThoughtFlow[];
+  onOpenFlow: (flow: ThoughtFlow) => void;
+  onOpenNote: (note: Note) => void;
+  title?: string;
+  hint?: string;
+  emptyText?: string;
+}) {
+  if (!flows.length) {
+    if (!emptyText) return null;
+    return (
+      <View style={styles.retrievalSection}>
+        <View style={styles.retrievalSectionHeader}>
+          <View>
+            <Text style={styles.sectionTitle}>{title}</Text>
+            <Text style={styles.sectionHint}>{hint}</Text>
+          </View>
+        </View>
+        <Text style={styles.retrievalEmptyInline}>{emptyText}</Text>
+      </View>
+    );
+  }
+
+  return (
+    <View style={styles.retrievalSection}>
+      {flows.map((flow) => (
+        <ThoughtFlowCard key={flow.id} flow={flow} onOpenFlow={onOpenFlow} onOpenNote={onOpenNote} />
+      ))}
+    </View>
+  );
+}
+
+function ThoughtFlowCard({
+  flow,
+  onOpenFlow,
+  onOpenNote,
+}: {
+  flow: ThoughtFlow;
+  onOpenFlow: (flow: ThoughtFlow) => void;
+  onOpenNote: (note: Note) => void;
+}) {
+  const updatedAtLabel = formatDate(flow.updatedAt);
+
+  return (
+    <Pressable style={styles.thoughtFlowCard} onPress={() => onOpenFlow(flow)}>
+      <View style={styles.flowCardTopRow}>
+        <View style={styles.flowNumberPill}><Text style={styles.flowNumberText}>{flow.notes.length}</Text></View>
+        <Text style={styles.thoughtFlowOneLine}>오늘 업데이트</Text>
+      </View>
+      <Text style={styles.thoughtFlowTitle} numberOfLines={2}>{flow.title}</Text>
+      <Text style={styles.thoughtFlowOneLine}>관련 생각 {flow.notes.length}개 · {updatedAtLabel}</Text>
+      <View style={styles.flowDraftBox}>
+        <Text style={styles.flowDraftLabel}>AI가 합친 초안</Text>
+        <Text style={styles.flowDraftText} numberOfLines={2}>{flow.mergedDraft?.title || flow.synthesis}</Text>
+      </View>
+      <View style={styles.flowQuestionBox}>
+        <Text style={styles.flowQuestionText} numberOfLines={2}>다음 질문: {flow.nextQuestion}</Text>
+      </View>
+      <View style={styles.flowTimeline}>
+        {flow.notes.slice(0, 3).map((note, index) => (
+          <Pressable
+            key={note.id}
+            style={styles.flowTimelineItem}
+            onPress={(event) => {
+              event.stopPropagation?.();
+              onOpenNote(note);
+            }}
+          >
+            <View style={styles.flowTimelineRail}>
+              <View style={styles.flowTimelineDot} />
+              {index < Math.min(3, flow.notes.length) - 1 ? <View style={styles.flowTimelineLine} /> : null}
+            </View>
+            <Text style={styles.flowTimelineText} numberOfLines={1}>{note.ai_title || makeDraftTitle(note.raw_text)}</Text>
+          </Pressable>
+        ))}
+      </View>
+      <Text style={styles.flowCardArrow}>›</Text>
+    </Pressable>
+  );
+}
+
+
+function AppBackButton({ label, onPress, style }: { label: string; onPress: () => void; style?: any }) {
+  return (
+    <Pressable style={[styles.backButton, style]} onPress={onPress} hitSlop={18}>
+      <View style={styles.backButtonInner}>
+        <Text style={styles.backChevron}>{'‹'}</Text>
+        <Text style={styles.backButtonText} numberOfLines={1}>{label}</Text>
+      </View>
+    </Pressable>
+  );
+}
+
+function useSwipeBack(onBack: () => void) {
+  const translateX = useRef(new Animated.Value(0)).current;
+  const progress = useRef(new Animated.Value(0)).current;
+
+  const restore = useCallback(() => {
+    Animated.parallel([
+      Animated.spring(translateX, { toValue: 0, friction: 8, tension: 130, useNativeDriver: true }),
+      Animated.spring(progress, { toValue: 0, friction: 8, tension: 130, useNativeDriver: true }),
+    ]).start();
+  }, [progress, translateX]);
+
+  const settleBack = useCallback(() => {
+    Animated.parallel([
+      Animated.spring(translateX, { toValue: SCREEN_WIDTH, friction: 10, tension: 90, useNativeDriver: true }),
+      Animated.timing(progress, { toValue: 1, duration: 120, useNativeDriver: true }),
+    ]).start(() => onBack());
+  }, [onBack, progress, translateX]);
+
+  const responder = useMemo(
+    () => PanResponder.create({
+      onStartShouldSetPanResponder: () => false,
+      onMoveShouldSetPanResponder: (_event, gesture) => gesture.dx > 6 && Math.abs(gesture.dx) > Math.abs(gesture.dy) * 1.15,
+      onMoveShouldSetPanResponderCapture: (_event, gesture) => gesture.dx > 8 && Math.abs(gesture.dx) > Math.abs(gesture.dy) * 1.2,
+      onPanResponderGrant: () => {
+        translateX.stopAnimation();
+        progress.stopAnimation();
+      },
+      onPanResponderMove: (_event, gesture) => {
+        const raw = Math.max(0, gesture.dx);
+        const resisted = raw < 90 ? raw : 90 + (raw - 90) * 0.58;
+        translateX.setValue(resisted);
+        progress.setValue(Math.min(1, raw / 180));
+      },
+      onPanResponderRelease: (_event, gesture) => {
+        const shouldBack = gesture.dx > 86 || gesture.vx > 0.42;
+        if (shouldBack) settleBack();
+        else restore();
+      },
+      onPanResponderTerminate: restore,
+    }),
+    [progress, restore, settleBack, translateX],
+  );
+
+  return {
+    responder,
+    animatedStyle: {
+      transform: [{ translateX }],
+      opacity: progress.interpolate({ inputRange: [0, 1], outputRange: [1, 0.96] }),
+    },
+  };
+}
+
+
+function ThoughtFlowDetailScreen({
+  flow,
+  onBack,
+  onOpenNote,
+  onRegenerateDraft,
+  generationState,
+}: {
+  flow: ThoughtFlow;
+  onBack: () => void;
+  onOpenNote: (note: Note) => void;
+  onRegenerateDraft: (flow: ThoughtFlow) => Promise<void>;
+  generationState?: { loading: boolean; error?: string };
+}) {
+  const draft = flow.mergedDraft;
+  const [isSaved, setIsSaved] = useState(draft.status === 'saved' || flow.status === 'saved');
+  const [exporting, setExporting] = useState(false);
+  const [sourcesExpanded, setSourcesExpanded] = useState(false);
+  const statusLabel = isSaved ? '저장된 흐름' : flow.status === 'expanded' ? '확장된 흐름' : '임시 흐름';
+
+  const swipeBack = useSwipeBack(onBack);
+
+  useEffect(() => {
+    setIsSaved(draft.status === 'saved' || flow.status === 'saved');
+  }, [draft.id, draft.status, flow.status]);
+
+  function saveDraft() {
+    setIsSaved(true);
+  }
+
+  async function regenerateDraft() {
+    await onRegenerateDraft(flow);
+  }
+
+  async function exportDraft() {
+    const markdown = buildThoughtFlowExportMarkdown(flow);
+    const title = `${draft.title}.md`;
+
+    setExporting(true);
+    try {
+      if (Platform.OS === 'ios' && FileSystem.cacheDirectory) {
+        const fileUri = `${FileSystem.cacheDirectory}${makeSafeFileName(draft.title)}.md`;
+        await FileSystem.writeAsStringAsync(fileUri, markdown, { encoding: FileSystem.EncodingType.UTF8 });
+        await Share.share({ title, url: fileUri });
+      } else {
+        await Share.share({ title, message: markdown });
+      }
+    } catch (error) {
+      showError('내보내기 실패', error);
+    } finally {
+      setExporting(false);
+    }
+  }
+
+  function deferFlow(message: string) {
+    Alert.alert('흐름을 잠시 내려둘게요', message);
+  }
+
+  return (
+    <Animated.View style={[styles.detailShell, swipeBack.animatedStyle]}>
+      <View pointerEvents="box-only" style={styles.edgeSwipeZone} {...swipeBack.responder.panHandlers} />
+      <View style={styles.detailFixedTopBar}>
+        <AppBackButton label="생각" onPress={onBack} />
+        <Text style={styles.flowDetailStatus}>{statusLabel}</Text>
+      </View>
+
+      <ScrollView
+        contentContainerStyle={styles.detailContent}
+        contentInsetAdjustmentBehavior="never"
+        scrollIndicatorInsets={{ bottom: 180 }}
+      >
+        <View style={styles.flowMergedHero}>
+          <Text style={styles.flowMergedKicker}>자라난 글 초안</Text>
+          <CopyableText style={styles.detailTitle} copyValue={draft.title}>{draft.title}</CopyableText>
+          {generationState?.loading ? (
+            <View style={styles.draftLoadingBox}>
+              <ActivityIndicator />
+              <Text style={styles.flowSectionHint}>AI가 흩어진 메모를 하나의 생각으로 엮는 중이에요.</Text>
+            </View>
+          ) : null}
+          {generationState?.error ? <Text style={styles.voiceErrorText}>{generationState.error}</Text> : null}
+          <CopyableText style={styles.mergedDraftBody} copyValue={draft.body}>{draft.body}</CopyableText>
+
+          <View style={styles.compactActionRow}>
+            <Pressable style={[styles.primaryButton, isSaved && styles.savedPrimaryButton]} onPress={saveDraft}>
+              <Text style={styles.primaryButtonText}>{isSaved ? '저장됨' : '저장하기'}</Text>
+            </Pressable>
+            <Pressable style={[styles.secondaryButton, generationState?.loading && styles.disabledButton]} onPress={regenerateDraft} disabled={generationState?.loading}>
+              <Text style={styles.secondaryButtonText}>{generationState?.loading ? '생성 중...' : '다시 생성'}</Text>
+            </Pressable>
+          </View>
+          {isSaved ? <Text style={styles.savedDraftHint}>이 흐름을 계속 볼 수 있게 저장해둘게요.</Text> : null}
+
+          <Pressable style={[styles.exportButton, exporting && styles.disabledButton]} onPress={exportDraft} disabled={exporting}>
+            <Text style={styles.exportButtonText}>{exporting ? '내보내는 중...' : 'Markdown으로 내보내기'}</Text>
+          </Pressable>
+        </View>
+
+        <View style={styles.detailSection}>
+          <Pressable style={styles.collapsedSourcePill} onPress={() => setSourcesExpanded((value) => !value)}>
+            <Text style={styles.detailSectionTitle}>소스 녹음/메모 {flow.notes.length}개</Text>
+            <Text style={styles.expandReasonText}>{sourcesExpanded ? '접기' : '열기'}</Text>
+          </Pressable>
+          {sourcesExpanded ? (
+            <View style={styles.analysisBox}>
+              {flow.notes.map((note, index) => (
+                <Pressable key={note.id} style={styles.flowSourceNoteCard} onPress={() => onOpenNote(note)}>
+                  <Text style={styles.flowSourceNoteIndex}>{index + 1}</Text>
+                  <View style={styles.flowSourceNoteBody}>
+                    <Text style={styles.relatedTitle} numberOfLines={1}>{note.ai_title || makeDraftTitle(note.raw_text)}</Text>
+                  </View>
+                </Pressable>
+              ))}
+            </View>
+          ) : null}
+        </View>
+      </ScrollView>
+    </Animated.View>
+  );
+}
+
+function RetrievalSection({
+  title,
+  hint,
+  candidates,
+  feedback,
+  onOpen,
+  onFeedback,
+}: {
+  title: string;
+  hint: string;
+  candidates: RetrievalCandidate[];
+  feedback: RetrievalFeedbackMap;
+  onOpen: (note: Note) => void;
+  onFeedback: (noteId: string, status: RetrievalFeedbackStatus) => void;
+}) {
+  return (
+    <View style={styles.retrievalSection}>
+      <View style={styles.retrievalSectionHeader}>
+        <View>
+          <Text style={styles.sectionTitle}>{title}</Text>
+          {hint ? <Text style={styles.sectionHint}>{hint}</Text> : null}
+        </View>
+      </View>
+      {candidates.length ? (
+        candidates.map((candidate) => (
+          <RetrievalCard
+            key={`${candidate.section}-${candidate.note.id}`}
+            candidate={candidate}
+            feedback={feedback[candidate.note.id]}
+            onOpen={onOpen}
+            onFeedback={onFeedback}
+          />
+        ))
+      ) : (
+        <Text style={styles.retrievalEmptyInline}>아직 회수할 생각이 부족해요. 샘플을 넣거나 메모를 더 남겨보세요.</Text>
+      )}
+    </View>
+  );
+}
+
+function RetrievalCard({
+  candidate,
+  feedback,
+  onOpen,
+  onFeedback,
+}: {
+  candidate: RetrievalCandidate;
+  feedback?: RetrievalFeedbackMap[string];
+  onOpen: (note: Note) => void;
+  onFeedback: (noteId: string, status: RetrievalFeedbackStatus) => void;
+}) {
+  const { note } = candidate;
+  const [expanded, setExpanded] = useState(false);
+  const feedbackLabel = feedback?.status === 'useful' ? `도움 됨 ${feedback.usedCount}회` : feedback?.status === 'later' ? '나중에 볼 생각' : null;
+  const badges = getRetrievalBadges(candidate);
+  const strength = getRetrievalStrength(candidate);
+  const oneLine = getRetrievalOneLine(candidate);
+
+  return (
+    <View style={styles.retrievalCard}>
+      <Pressable onPress={() => onOpen(note)} style={styles.retrievalCardPressArea}>
+        <View style={styles.noteMetaRow}>
+          <View style={styles.retrievalBadgeRow}>
+            {badges.map((badge) => <Text key={badge} style={styles.connectionBadge}>{badge}</Text>)}
+          </View>
+          <Text style={styles.noteDate}>{formatDate(note.created_at)}</Text>
+        </View>
+        <CopyableText style={styles.noteTitle} copyValue={note.ai_title || makeDraftTitle(note.raw_text)}>{note.ai_title || makeDraftTitle(note.raw_text)}</CopyableText>
+        <CopyableText style={styles.retrievalOneLine} copyValue={oneLine}>{oneLine}</CopyableText>
+        <View style={styles.strengthRow}>
+          <Text style={styles.strengthText}>{strength.label}</Text>
+          <Text style={styles.strengthDots}>{strength.dots}</Text>
+        </View>
+        {feedbackLabel ? <Text style={styles.feedbackState}>{feedbackLabel}</Text> : null}
+      </Pressable>
+      <Pressable style={styles.expandReasonButtonLight} onPress={() => setExpanded((value) => !value)}>
+        <Text style={styles.expandReasonTextLight}>{expanded ? '설명 접기' : '왜 이어졌나요?'}</Text>
+      </Pressable>
+      {expanded ? (
+        <View style={styles.retrievalReasonBox}>
+          <Text style={styles.retrievalReasonLabel}>왜 지금 보여주나요?</Text>
+          <Text style={styles.retrievalReasonBody}>{candidate.surfaceReason}</Text>
+          {candidate.recentConnection ? (
+            <>
+              <Text style={styles.retrievalReasonLabel}>최근 어떤 생각과 이어지나요?</Text>
+              <Text style={styles.retrievalReasonBody}>{candidate.recentConnection}</Text>
+            </>
+          ) : null}
+          <Text style={styles.retrievalReasonLabel}>지금 무엇에 써먹을 수 있나요?</Text>
+          <Text style={styles.retrievalReasonBody}>{candidate.useSuggestion}</Text>
+          {candidate.connectionReason ? <Text style={styles.connectionReason}>↔ {candidate.connectionReason}</Text> : null}
+        </View>
+      ) : null}
+      <View style={styles.feedbackButtonRow}>
+        <Pressable style={styles.feedbackButton} onPress={() => onFeedback(note.id, 'useful')}>
+          <Text style={styles.feedbackButtonText}>지금 도움 됐어요</Text>
+        </Pressable>
+        <Pressable style={styles.feedbackButton} onPress={() => onFeedback(note.id, 'later')}>
+          <Text style={styles.feedbackButtonText}>나중에 다시 볼래요</Text>
+        </Pressable>
+        <Pressable style={styles.feedbackButtonMuted} onPress={() => onFeedback(note.id, 'hidden')}>
+          <Text style={styles.feedbackButtonMutedText}>오늘은 안 볼래요</Text>
+        </Pressable>
+      </View>
+    </View>
+  );
+}
+
+function getRetrievalBadges(candidate: RetrievalCandidate) {
+  const badges: string[] = [];
+  if (candidate.surfaceReason.includes('반복') || candidate.surfaceReason.includes('흐름')) badges.push('반복되는 고민');
+  if (candidate.surfaceReason.includes('묻혀') || candidate.surfaceReason.includes('일 동안')) badges.push('오래 묻힌 생각');
+  if (candidate.recentConnection) badges.push('같은 의도');
+  if (candidate.connectionReason) badges.push('같은 주제');
+  if (candidate.section === 'today') badges.push('지금 다시 볼 만함');
+  if (candidate.section === 'connected') badges.push('강하게 이어짐');
+  if (badges.length === 0) badges.push('같은 방향');
+  return Array.from(new Set(badges)).slice(0, 3);
+}
+
+function getRetrievalStrength(candidate: RetrievalCandidate) {
+  const score = (candidate.recentConnection ? 1 : 0) + (candidate.connectionReason ? 1 : 0) + (candidate.section === 'today' ? 1 : 0);
+  if (score >= 3) return { label: '강하게 이어져요', dots: '●●●' };
+  if (score === 2) return { label: '이어져요', dots: '●●○' };
+  return { label: '살짝 이어져요', dots: '●○○' };
+}
+
+function getRetrievalOneLine(candidate: RetrievalCandidate) {
+  const days = daysSince(candidate.note.created_at);
+  if (candidate.section === 'buried' && days > 0) return `${days}일 만에 다시 떠오른 생각이에요.`;
+  if (candidate.surfaceReason.includes('반복') || candidate.surfaceReason.includes('흐름')) return '비슷한 고민이 최근에도 이어졌어요.';
+  if (candidate.section === 'connected') return '방금 생각과 같은 방향을 보고 있어요.';
+  if (candidate.section === 'recent') return '최근 생각이라 바로 이어서 다듬기 좋아요.';
+  return '이 생각은 지금 다시 볼 만해요.';
+}
+
+function RoutingBadge({ note, compact = false }: { note: Note; compact?: boolean }) {
+  const label = routingLabel(note);
+  if (!label) return null;
+  return (
+    <View style={[styles.routingBadge, compact && styles.routingBadgeCompact]}>
+      <Text style={styles.routingBadgeText}>{label}</Text>
+    </View>
+  );
+}
+
+function routingLabel(note: Note) {
+  if (note.routing_status === 'pending_review') return '…';
+  if (note.routing_status === 'routing') return '◌';
+  if (note.routing_status === 'route_failed') return '!';
+  if (note.is_pinned) return '⌖';
+  if (note.parent_note_id) return `↳${formatConfidence(note.ai_thread_confidence)}`;
+  if (note.ai_thread_reason) return `↔${formatConfidence(note.ai_thread_confidence)}`;
+  return null;
+}
+
+function formatConfidence(value?: number | null) {
+  if (typeof value !== 'number') return '';
+  return ` · ${Math.round(value * 100)}%`;
+}
+
+function NoteDetail({
+  note,
+  relatedNotes,
+  sourceLogs,
+  saving,
+  voiceJob,
+  onBack,
+  onSave,
+  onDelete,
+  onTogglePin,
+  onDetachLog,
+  playback,
+  onPlayVoice,
+  onPauseVoice,
+  onStopVoice,
+  onRetryVoice,
+  onOpenRelated,
+  onRewriteNote,
+  rewriting,
+}: {
+  note: Note;
+  relatedNotes: Note[];
+  sourceLogs: Note[];
+  saving: boolean;
+  voiceJob?: VoiceJob;
+  playback: AudioPlaybackState | null;
+  onPlayVoice: (note: Note) => Promise<void>;
+  onPauseVoice: () => Promise<void>;
+  onStopVoice: () => Promise<void>;
+  onBack: () => void;
+  onSave: (noteId: string, nextText: string) => Promise<void>;
+  onDelete: (note: Note) => void;
+  onTogglePin: (noteId: string) => Promise<void>;
+  onDetachLog: (log: Note) => Promise<void>;
+  onRetryVoice: (note: Note) => Promise<void>;
+  onOpenRelated: (note: Note) => void;
+  onRewriteNote: (note: Note) => Promise<void>;
+  rewriting: boolean;
+}) {
+  const category = inferCategory(note);
+  const questions = makeFollowUpQuestions(note);
+  const [isEditing, setIsEditing] = useState(false);
+  const [logsExpanded, setLogsExpanded] = useState(false);
+  const [exporting, setExporting] = useState(false);
+  const [draftText, setDraftText] = useState(note.raw_text);
+  const noteMeaning = inferMeaning(note);
+  const relatedCandidates = useMemo(() => relatedNotes.map((related) => scoreRelatedNote(note, related)), [note, relatedNotes]);
+
+  useEffect(() => {
+    setDraftText(note.raw_text);
+    setIsEditing(false);
+  }, [note.id, note.raw_text]);
+
+  async function saveEdit() {
+    await onSave(note.id, draftText);
+    setIsEditing(false);
+  }
+
+  async function exportNote() {
+    const markdown = buildNoteExportMarkdown(note, sourceLogs, relatedNotes);
+    const title = `${note.ai_title || makeDraftTitle(note.raw_text)}.md`;
+
+    setExporting(true);
+    try {
+      if (Platform.OS === 'ios' && FileSystem.cacheDirectory) {
+        const fileUri = `${FileSystem.cacheDirectory}${makeSafeFileName(note.ai_title || makeDraftTitle(note.raw_text))}.md`;
+        await FileSystem.writeAsStringAsync(fileUri, markdown, { encoding: FileSystem.EncodingType.UTF8 });
+        await Share.share({ title, url: fileUri });
+      } else {
+        await Share.share({ title, message: markdown });
+      }
+    } catch (error) {
+      showError('내보내기 실패', error);
+    } finally {
+      setExporting(false);
+    }
+  }
+
+  const swipeBack = useSwipeBack(onBack);
+
+
+  return (
+    <Animated.View style={[styles.detailShell, swipeBack.animatedStyle]}>
+      <View pointerEvents="box-only" style={styles.edgeSwipeZone} {...swipeBack.responder.panHandlers} />
+      <View style={styles.detailFixedTopBar}>
+        <AppBackButton label="목록" onPress={onBack} />
+        <View style={styles.detailActionRow}>
+          <Pressable style={styles.iconActionButton} onPress={() => onTogglePin(note.id)} disabled={saving}>
+            <Text style={styles.iconActionText}>{note.is_pinned ? '⌖' : '⌑'}</Text>
+          </Pressable>
+          <Pressable style={styles.iconActionButton} onPress={() => onDelete(note)} disabled={saving}>
+            <Text style={styles.iconActionText}>…</Text>
+          </Pressable>
+        </View>
+      </View>
+
+      <ScrollView
+        contentContainerStyle={styles.detailContent}
+        keyboardShouldPersistTaps="handled"
+        contentInsetAdjustmentBehavior="never"
+        scrollIndicatorInsets={{ bottom: 180 }}
+      >
+      <View style={styles.detailHero}>
+        <CopyableText style={styles.detailTitle} copyValue={note.ai_title || makeDraftTitle(note.raw_text)}>{note.ai_title || makeDraftTitle(note.raw_text)}</CopyableText>
+        <View style={styles.noteMetaRow}>
+          <View style={styles.noteMetaLeft}>
+            <Text style={styles.noteType}>{note.source_type === 'voice' ? '🎙' : '✎'}</Text>
+            <Text style={styles.singleCategory}>{category}</Text>
+          </View>
+          <Text style={styles.noteDate}>{formatDate(note.created_at)}</Text>
+        </View>
+        <CopyableText style={styles.detailSummary} copyValue={note.ai_summary || makeDraftSummary(note.raw_text)}>{note.ai_summary || makeDraftSummary(note.raw_text)}</CopyableText>
+        <View style={styles.noteHeroActionRow}>
+          <Pressable
+            style={[styles.noteRewriteButton, rewriting && styles.disabledButton]}
+            onPress={() => onRewriteNote(note)}
+            disabled={rewriting || saving}
+          >
+            <Text style={styles.noteRewriteButtonText}>{rewriting ? '정리 중...' : '원본 다시 정리하기'}</Text>
+          </Pressable>
+          <Pressable
+            style={[styles.noteExportButton, exporting && styles.disabledButton]}
+            onPress={exportNote}
+            disabled={exporting}
+          >
+            <Text style={styles.noteExportButtonText}>{exporting ? '내보내는 중...' : '내보내기'}</Text>
+          </Pressable>
+        </View>
+        <View style={styles.compactMetaRow}>
+          {note.audio_url ? <Text style={styles.iconMeta}>◉</Text> : null}
+          <RoutingBadge note={note} />
+          <Text style={styles.iconMeta}>💬 {Math.max(0, sourceLogs.length - 1)}</Text>
+          {relatedNotes.length ? <Text style={styles.iconMeta}>↔ {relatedNotes.length}</Text> : null}
+        </View>
+      </View>
+
+      <NoteAudioBlock
+        note={note}
+        voiceJob={voiceJob}
+        saving={saving}
+        playback={playback}
+        onPlayVoice={onPlayVoice}
+        onPauseVoice={onPauseVoice}
+        onStopVoice={onStopVoice}
+        onRetryVoice={onRetryVoice}
+      />
+
+      {relatedNotes.length ? (
+        <View style={styles.rediscoveryBanner}>
+          <Text style={styles.rediscoveryBannerKicker}>연결된 생각</Text>
+          <Text style={styles.rediscoveryBannerTitle}>이전에 비슷한 생각을 {relatedNotes.length}개 남겼어요</Text>
+          <Text style={styles.rediscoveryBannerBody}>아래에서 눌러 바로 이어볼 수 있어요.</Text>
+        </View>
+      ) : null}
+
+      <View style={styles.detailSection}>
+        <Text style={styles.detailSectionTitle}>연결된 생각</Text>
+        {relatedCandidates.length ? (
+          relatedCandidates.map((candidate) => (
+            <Pressable key={candidate.note.id} style={styles.relatedItem} onPress={() => onOpenRelated(candidate.note)}>
+              <View style={styles.relatedMetaRow}>
+                <Text style={styles.relatedMeta}>↔ {candidate.meaning.memoryType}</Text>
+                <Text style={styles.relatedMeta}>{formatDate(candidate.note.created_at)}</Text>
+              </View>
+              <CopyableText
+                style={styles.relatedTitle}
+                numberOfLines={1}
+                copyValue={candidate.note.ai_title || makeDraftTitle(candidate.note.raw_text)}
+              >
+                {candidate.note.ai_title || makeDraftTitle(candidate.note.raw_text)}
+              </CopyableText>
+              <CopyableText
+                style={styles.relatedBody}
+                numberOfLines={2}
+                copyValue={candidate.reasons[0] ?? candidate.note.raw_text}
+              >
+                {candidate.reasons[0] ?? candidate.note.raw_text}
+              </CopyableText>
+            </Pressable>
+          ))
+        ) : (
+          <Text style={styles.emptyInline}>아직 연결된 생각이 없어요.</Text>
+        )}
+      </View>
+
+      <View style={styles.threadSection}>
+        <View style={styles.threadHeaderRow}>
+          <Text style={styles.threadHeaderIcon}>전사 원문</Text>
+          <Pressable style={styles.iconActionButton} onPress={() => setLogsExpanded((value) => !value)}>
+            <Text style={styles.iconActionText}>{logsExpanded ? '⌃' : `＋${Math.max(0, sourceLogs.length - 1)}`}</Text>
+          </Pressable>
+        </View>
+        {(logsExpanded ? sourceLogs : sourceLogs.slice(0, 1)).map((log, index) => (
+          <ThreadLogItem
+            key={log.id}
+            log={log}
+            index={index}
+            expanded={logsExpanded}
+            saving={saving}
+            onDetachLog={onDetachLog}
+          />
+        ))}
+        {!logsExpanded && sourceLogs.length > 1 ? (
+          <Pressable style={styles.threadMoreButton} onPress={() => setLogsExpanded(true)}>
+            <Text style={styles.threadMoreText}>＋{sourceLogs.length - 1}</Text>
+          </Pressable>
+        ) : null}
+        <View style={styles.threadEditRow}>
+          <Pressable style={styles.iconActionButton} onPress={() => setIsEditing((value) => !value)} disabled={saving}>
+            <Text style={styles.iconActionText}>{isEditing ? '×' : '✎'}</Text>
+          </Pressable>
+        </View>
+        {isEditing ? (
+          <View style={styles.editBox}>
+            <TextInput
+              style={styles.editInput}
+              multiline
+              scrollEnabled
+              value={draftText}
+              onChangeText={setDraftText}
+              placeholder="생각 원문을 다듬어보세요"
+              textAlignVertical="top"
+            />
+            <Pressable
+              style={[styles.primaryButton, saving && styles.disabledButton]}
+              onPress={saveEdit}
+              disabled={saving || !draftText.trim()}
+            >
+              <Text style={styles.primaryButtonText}>{saving ? '저장 중...' : '저장하고 다시 정리'}</Text>
+            </Pressable>
+          </View>
+        ) : null}
+      </View>
+
+      </ScrollView>
+    </Animated.View>
+  );
+}
+
+function DebugRow({ label, value }: { label: string; value: string }) {
+  return (
+    <View style={styles.debugRow}>
+      <Text style={styles.debugLabel}>{label}</Text>
+      <Text style={styles.debugValue}>{value || '-'}</Text>
+    </View>
+  );
+}
+
+function CopyableText({
+  children,
+  copyValue,
+  style,
+  numberOfLines,
+}: {
+  children: ReactNode;
+  copyValue: string;
+  style?: any;
+  numberOfLines?: number;
+}) {
+  const [feedback, setFeedback] = useState<string | null>(null);
+  const feedbackTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (feedbackTimerRef.current) clearTimeout(feedbackTimerRef.current);
+    };
+  }, []);
+
+  async function copyText() {
+    const copied = await copyTextWithFallback(copyValue);
+    setFeedback(copied ? '복사했어요' : '공유 메뉴를 열었어요');
+    if (feedbackTimerRef.current) clearTimeout(feedbackTimerRef.current);
+    feedbackTimerRef.current = setTimeout(() => setFeedback(null), COPY_FEEDBACK_MS);
+  }
+
+  return (
+    <Pressable style={styles.copyableTextWrap} onLongPress={copyText} delayLongPress={350}>
+      <Text style={style} numberOfLines={numberOfLines}>{children}</Text>
+      {feedback ? <Text style={styles.copyFeedbackText}>{feedback}</Text> : null}
+    </Pressable>
+  );
+}
+
+async function copyTextWithFallback(value: string) {
+  const text = value.trim();
+  if (!text) return false;
+
+  const webClipboard = (globalThis as { navigator?: { clipboard?: { writeText?: (text: string) => Promise<void> } } }).navigator?.clipboard;
+  if (webClipboard?.writeText) {
+    await webClipboard.writeText(text);
+    return true;
+  }
+
+  await Share.share({ message: text });
+  return false;
+}
+
+
+function formatRecordingTime(ms: number) {
+  const totalSeconds = Math.max(0, Math.floor(ms / 1000));
+  const minutes = Math.floor(totalSeconds / 60).toString().padStart(2, '0');
+  const seconds = (totalSeconds % 60).toString().padStart(2, '0');
+  return `${minutes}:${seconds}`;
+}
+
+function formatAudioDuration(ms?: number | null) {
+  if (!ms || ms <= 0) return '음성';
+  const totalSeconds = Math.max(1, Math.round(ms / 1000));
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  if (minutes <= 0) return `${seconds}초`;
+  if (seconds === 0) return `${minutes}분`;
+  return `${minutes}분 ${seconds}초`;
+}
+
+function NoteAudioBlock({
+  note,
+  voiceJob,
+  saving,
+  playback,
+  onPlayVoice,
+  onPauseVoice,
+  onStopVoice,
+  onRetryVoice,
+}: {
+  note: Note;
+  voiceJob?: VoiceJob;
+  saving: boolean;
+  playback: AudioPlaybackState | null;
+  onPlayVoice: (note: Note) => Promise<void>;
+  onPauseVoice: () => Promise<void>;
+  onStopVoice: () => Promise<void>;
+  onRetryVoice: (note: Note) => Promise<void>;
+}) {
+  const hasAudio = !!(note.local_audio_url ?? note.audio_url);
+  const shouldShow = hasAudio || (voiceJob && voiceJob.status !== 'done');
+  if (!shouldShow) return null;
+
+  const durationMs = playback?.durationMs || note.audio_duration_ms || 0;
+  const positionMs = playback?.positionMs ?? 0;
+  const progress = durationMs > 0 ? Math.min(1, positionMs / durationMs) : 0;
+  const isPlaying = !!playback && !playback.paused && !playback.loading;
+  const bars = [10, 22, 14, 28, 18, 34, 12, 26, 16, 30, 20, 24];
+
+  return (
+    <View style={styles.noteAudioBlock}>
+      <View style={styles.noteAudioTopRow}>
+        <View style={styles.noteAudioTextWrap}>
+          <Text style={styles.noteAudioKicker}>음성 메모</Text>
+          <Text style={styles.noteAudioTitle}>{voiceJob && voiceJob.status !== 'done' ? voiceJob.message : '원본 녹음이 보관되어 있어요'}</Text>
+        </View>
+        <Text style={styles.noteAudioBadge}>{voiceJob?.status === 'failed' ? '실패' : hasAudio ? '보관됨' : '처리 중'}</Text>
+      </View>
+      <View style={styles.noteWaveformRow}>
+        {bars.map((height, index) => {
+          const filled = index / bars.length <= progress;
+          return <View key={`${height}-${index}`} style={[styles.noteWaveformBar, { height }, filled && styles.noteWaveformBarActive, isPlaying && { opacity: index % 2 ? 0.72 : 1 }]} />;
+        })}
+      </View>
+      {hasAudio ? (
+        <>
+          <Text style={styles.noteAudioTime}>{formatRecordingTime(positionMs)} / {durationMs ? formatRecordingTime(durationMs) : formatAudioDuration(note.audio_duration_ms)}</Text>
+          <View style={styles.noteAudioControlRow}>
+            <Pressable style={styles.audioControlButton} onPress={() => onPlayVoice(note)} disabled={saving || playback?.loading}>
+              <Text style={styles.audioControlButtonText}>{playback?.paused ? '다시 재생' : playback ? '재생 중' : '원본 음성 듣기'}</Text>
+            </Pressable>
+            <Pressable style={styles.audioControlButtonSecondary} onPress={onPauseVoice} disabled={!playback || playback.paused}>
+              <Text style={styles.audioControlButtonSecondaryText}>일시정지</Text>
+            </Pressable>
+            <Pressable style={styles.audioControlButtonSecondary} onPress={onStopVoice} disabled={!playback}>
+              <Text style={styles.audioControlButtonSecondaryText}>정지</Text>
+            </Pressable>
+          </View>
+        </>
+      ) : null}
+      {voiceJob?.error ? <Text style={styles.voiceErrorText}>{voiceJob.error}</Text> : null}
+      {voiceJob?.status === 'failed' ? (
+        <Pressable style={styles.retryButton} onPress={() => onRetryVoice(note)} disabled={saving}>
+          <Text style={styles.retryButtonText}>음성 다시 전사</Text>
+        </Pressable>
+      ) : null}
+    </View>
+  );
+}
+
+function ThreadLogItem({
+  log,
+  index,
+  expanded,
+  saving,
+  onDetachLog,
+}: {
+  log: Note;
+  index: number;
+  expanded: boolean;
+  saving: boolean;
+  onDetachLog: (log: Note) => Promise<void>;
+}) {
+  const [open, setOpen] = useState(false);
+  const showFull = expanded || open;
+
+  return (
+    <View style={styles.threadLogRow}>
+      <View style={styles.threadRail}>
+        <View style={styles.threadDot} />
+        <View style={styles.threadLine} />
+      </View>
+      <Pressable style={styles.threadLogBody} onPress={() => setOpen((value) => !value)}>
+        <View style={styles.threadLogMetaRow}>
+          <Text style={styles.logMeta}>{index === 0 ? '원문' : '↳'} · {formatDate(log.created_at)}</Text>
+          {!showFull && log.raw_text.length > 90 ? <Text style={styles.threadMoreText}>⌄</Text> : null}
+        </View>
+        <CopyableText style={styles.logBody} numberOfLines={showFull ? undefined : 3} copyValue={log.raw_text}>
+          {log.raw_text}
+        </CopyableText>
+        {showFull && log.ai_thread_reason ? <Text style={styles.logReason}>↔ {log.ai_thread_reason}</Text> : null}
+        {showFull && log.parent_note_id ? (
+          <Pressable style={styles.detachButton} onPress={() => onDetachLog(log)} disabled={saving}>
+            <Text style={styles.detachButtonText}>분리</Text>
+          </Pressable>
+        ) : null}
+      </Pressable>
+    </View>
+  );
+}
+
+function buildCollectionSummaries(notes: Note[]): CollectionSummary[] {
+  const definitions = [
+    { id: 'app', title: '앱 기능', description: '화면, 기능, 사용성에 대한 생각', keywords: ['앱', 'ui', 'ux', '화면', '기능', '메모', '사용자'] },
+    { id: 'marketing', title: '마케팅', description: '홍보, 쇼츠, 카피, 콘텐츠 아이디어', keywords: ['마케팅', '홍보', '쇼츠', '카피', '콘텐츠', '유튜브'] },
+    { id: 'game', title: '게임 아이디어', description: '게임 개발과 플레이 경험 관련 생각', keywords: ['게임', '통나무', '스팀', '유닛', '전투'] },
+    { id: 'later', title: '나중에 볼 것', description: '아직 분류하기 애매하지만 보존할 생각', keywords: ['나중', '참고', '자료', '링크', '확인'] },
+  ];
+
+  const used = new Set<string>();
+  const collections = definitions.map((definition) => {
+    const matched = notes.filter((note) => {
+      const text = noteText(note);
+      const ok = definition.keywords.some((keyword) => text.includes(keyword.toLowerCase()));
+      if (ok) used.add(note.id);
+      return ok;
+    });
+    return { id: definition.id, title: definition.title, description: definition.description, notes: matched };
+  });
+
+  const uncategorized = notes.filter((note) => !used.has(note.id));
+  collections.push({ id: 'uncategorized', title: '기타 생각', description: 'AI 자동 정리 전 임시 보관함', notes: uncategorized });
+
+  return collections.filter((collection) => collection.notes.length > 0 || collection.id !== 'uncategorized');
+}
+
+
+function computeThoughtFlowFingerprint(notes: Note[], feedback: RetrievalFeedbackMap) {
+  const notePart = notes
+    .map((note) => [note.id, note.updated_at ?? note.created_at, note.parent_note_id ?? '', note.deleted_at ?? ''].join(':'))
+    .sort()
+    .join('|');
+  const feedbackPart = Object.entries(feedback)
+    .map(([id, value]) => `${id}:${value.status}:${value.usedCount}:${value.updatedAt}`)
+    .sort()
+    .join('|');
+  return stableHash(`${notePart}::${feedbackPart}`);
+}
+
+function stableHash(value: string) {
+  let hash = 2166136261;
+  for (let index = 0; index < value.length; index += 1) {
+    hash ^= value.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+  return (hash >>> 0).toString(36);
+}
+
+function pickCohesiveFlowNotes(seed: Note, candidates: Note[], limit = 8) {
+  const seedMeaning = inferMeaning(seed);
+  return candidates
+    .map((note) => {
+      const meaning = inferMeaning(note);
+      const overlap = keywordOverlap(seedMeaning, meaning);
+      const sameProblem = seedMeaning.problem && seedMeaning.problem === meaning.problem ? 3 : 0;
+      const sameIntent = seedMeaning.intent && seedMeaning.intent === meaning.intent ? 2 : 0;
+      const sharedWords = sharedWordScore(seed, note);
+      const lowSignalPenalty = isLowSignalThoughtNote(note) ? -10 : 0;
+      return { note, score: overlap + sameProblem + sameIntent + sharedWords + lowSignalPenalty };
+    })
+    .filter((item) => item.score >= 3)
+    .sort((a, b) => b.score - a.score)
+    .slice(0, limit)
+    .map((item) => item.note);
+}
+
+function isLowSignalThoughtNote(note: Note) {
+  const text = noteText(note).toLowerCase();
+  if (text.length < 12) return true;
+  return ['quota', '429', '테스트', 'test', '전사 실패', '업로드하는 중', '전사하는 중'].some((word) => text.includes(word.toLowerCase()));
+}
+
+function buildRetrievalSections(notes: Note[], feedback: RetrievalFeedbackMap) {
+  const visible = notes
+    .filter((note) => feedback[note.id]?.status !== 'hidden')
+    .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+  const latest = visible[0];
+  const used = new Set<string>();
+
+  const take = (candidates: RetrievalCandidate[], limit: number) => {
+    const picked: RetrievalCandidate[] = [];
+    for (const candidate of candidates) {
+      if (used.has(candidate.note.id)) continue;
+      picked.push(candidate);
+      used.add(candidate.note.id);
+      if (picked.length >= limit) break;
+    }
+    return picked;
+  };
+
+  const thoughtFlows = buildThoughtFlows(visible, feedback);
+
+  const relatedToLatest = latest
+    ? retrieveCandidates(latest, visible, feedback)
+        .filter((item) => item.note.id !== latest.id)
+        .map((item) => {
+          const latestTitle = latest.ai_title || makeDraftTitle(latest.raw_text);
+          const reason = item.reasons[0] ?? '최근 생각과 이어지는 판단 재료입니다.';
+          return {
+            note: item.note,
+            section: 'connected' as const,
+            surfaceReason: `최근 “${latestTitle}”와 이어지는 맥락이라 다시 꺼냈어요.`,
+            recentConnection: `“${latestTitle}”와 연결됩니다. ${reason}`,
+            useSuggestion: inferMeaning(item.note).reusePurpose,
+            connectedNote: latest,
+            connectionReason: makeReadableConnectionReason(item.note, latest, item),
+          };
+        })
+    : [];
+
+  const topicRepeated = visible
+    .map((note) => {
+      const related = retrieveCandidates(note, visible, feedback).filter((item) => item.note.id !== note.id);
+      return { note, relatedCount: related.length, topRelated: related[0]?.note };
+    })
+    .filter((item) => item.relatedCount > 0)
+    .sort((a, b) => b.relatedCount - a.relatedCount)
+    .map((item) => {
+      const relatedTitle = item.topRelated ? item.topRelated.ai_title || makeDraftTitle(item.topRelated.raw_text) : null;
+      const topScore = item.topRelated ? scoreRelatedNote(item.note, item.topRelated) : null;
+      const meaning = inferMeaning(item.note);
+      return {
+        note: item.note,
+        section: 'today' as const,
+        surfaceReason: item.relatedCount >= 2
+          ? `최근 메모에서 ‘${meaning.intent}’ 흐름이 반복되고 있어요.`
+          : `이 메모는 ‘${meaning.intent}’이에요.`,
+        recentConnection: relatedTitle && topScore ? `“${relatedTitle}”와 연결됩니다. ${topScore.reasons[0] ?? '같은 맥락을 공유해요.'}` : undefined,
+        useSuggestion: meaning.reusePurpose,
+        connectedNote: item.topRelated,
+        connectionReason: item.topRelated && topScore ? makeReadableConnectionReason(item.note, item.topRelated, topScore) : undefined,
+      };
+    });
+
+  const buried = visible
+    .filter((note) => daysSince(note.created_at) >= 3)
+    .sort((a, b) => daysSince(b.created_at) - daysSince(a.created_at))
+    .map((note) => ({
+      note,
+      section: 'buried' as const,
+      surfaceReason: `${daysSince(note.created_at)}일 동안 다시 보지 않은 생각이에요.`,
+      recentConnection: latest && latest.id !== note.id ? `최근 생각과 직접 연결되지 않아도, 오래 묻혀 있던 판단 재료예요.` : undefined,
+      useSuggestion: makeUseSuggestion(note),
+    }));
+
+  const recent = visible.slice(0, 5).map((note) => ({
+    note,
+    section: 'recent' as const,
+    surfaceReason: '최근 남긴 생각이라 바로 이어서 다듬기 좋아요.',
+    useSuggestion: makeUseSuggestion(note),
+  }));
+
+  return {
+    thoughtFlows,
+    today: take(topicRepeated, 3),
+    connected: take(relatedToLatest, 3),
+    buried: take(buried, 3),
+    recent,
+  };
+}
+
+function buildThoughtFlows(notes: Note[], feedback: RetrievalFeedbackMap): ThoughtFlow[] {
+  const visible = notes.filter((note) => feedback[note.id]?.status !== 'hidden');
+  const groups = new Map<string, Note[]>();
+
+  for (const note of visible) {
+    const profile = inferMeaning(note);
+    const keys = [profile.problem, profile.intent, profile.decisionAxis, profile.reusePurpose]
+      .filter(Boolean)
+      .map((key) => key.trim());
+    for (const key of keys) {
+      const current = groups.get(key) ?? [];
+      current.push(note);
+      groups.set(key, current);
+    }
+  }
+
+  const flows: ThoughtFlow[] = [];
+  for (const [key, group] of groups) {
+    const unique = Array.from(new Map(group.map((note) => [note.id, note])).values());
+    if (unique.length < 2) continue;
+    const ranked = unique
+      .map((note) => ({ note, profile: inferMeaning(note) }))
+      .sort((a, b) => new Date(b.note.created_at).getTime() - new Date(a.note.created_at).getTime())
+      .slice(0, 5);
+    const profiles = ranked.map((item) => item.profile);
+    const sharedProblem = mostCommon(profiles.map((profile) => profile.problem)) || key;
+    const sharedIntent = mostCommon(profiles.map((profile) => profile.intent)) || key;
+    const sharedDecisionAxis = mostCommon(profiles.map((profile) => profile.decisionAxis)) || key;
+    const flowTitle = makeFlowTitle(sharedProblem, sharedDecisionAxis);
+    const confidenceScore = Math.min(0.95, 0.45 + ranked.length * 0.1 + (sharedProblem === key ? 0.1 : 0));
+    const now = new Date().toISOString();
+    const noteIds = ranked.map((item) => item.note.id);
+    const sourceNotes = ranked.map((item) => item.note);
+    flows.push({
+      id: `flow-${slugifyFlowId(flowTitle)}-${noteIds.join('-')}`,
+      status: 'temporary',
+      title: flowTitle,
+      noteIds,
+      notes: sourceNotes,
+      mergedDraft: buildFallbackMergedThoughtDraft(`flow-${slugifyFlowId(flowTitle)}-${noteIds.join('-')}`, flowTitle, sourceNotes, sharedProblem, sharedDecisionAxis, now),
+      sharedProblem,
+      sharedIntent,
+      sharedDecisionAxis,
+      synthesis: `이 흐름은 따로 남긴 생각들이 사실 ‘${sharedProblem}’라는 같은 문제를 반복해서 바라보고 있었다는 신호예요. 원태님은 이 문제를 감각이 아니라 ‘${sharedDecisionAxis}’로 다루려 하고 있어요.`,
+      whyNow: `최근 생각과 과거 생각이 같은 문제와 의도를 공유해서, 지금 보면 “내가 계속 이 문제를 보고 있었구나”를 확인할 수 있어요.`,
+      nextQuestion: `이 흐름을 지금 결정이나 v0.1 설명에 어떻게 써먹을 수 있을까?`,
+      createdAt: ranked[ranked.length - 1]?.note.created_at ?? now,
+      updatedAt: ranked[0]?.note.updated_at ?? ranked[0]?.note.created_at ?? now,
+      confidenceScore,
+    });
+  }
+
+  const pinnedFlow = buildPinnedPlanningThoughtFlow(visible);
+  const allFlows = pinnedFlow ? [pinnedFlow, ...flows] : flows;
+
+  const sortedFlows = allFlows.sort(
+    (a, b) => (b.confidenceScore ?? 0) - (a.confidenceScore ?? 0) || b.notes.length - a.notes.length,
+  );
+  const dedupedFlows: ThoughtFlow[] = [];
+
+  for (const flow of sortedFlows) {
+    const titleKey = normalizeFlowDedupeKey(flow.title);
+    const isDuplicate = dedupedFlows.some((picked) => {
+      const pickedTitleKey = normalizeFlowDedupeKey(picked.title);
+      return pickedTitleKey === titleKey || overlapRatio(picked.noteIds, flow.noteIds) >= 0.5;
+    });
+
+    if (!isDuplicate) dedupedFlows.push(flow);
+    if (dedupedFlows.length >= 5) break;
+  }
+
+  return dedupedFlows;
+}
+
+function buildPinnedPlanningThoughtFlow(notes: Note[]): ThoughtFlow {
+  const titles = ['기획력이란 무엇인가', '엘시와 갈비스 대화 중계', '엘시 에더리 전략가 GPT'];
+  const now = new Date().toISOString();
+  const pinnedNotes = titles.map((title, index) => {
+    const found = notes.find((note) => {
+      const text = `${note.ai_title ?? ''} ${note.raw_text}`;
+      return text.includes(title);
+    });
+    if (found) return found;
+    return makeVirtualThoughtFlowNote(title, index, now);
+  });
+
+  return {
+    id: 'thought-flow-planning-is-judgment-system',
+    status: 'temporary',
+    title: '기획은 판단 시스템이다',
+    noteIds: pinnedNotes.map((note) => note.id),
+    notes: pinnedNotes,
+    mergedDraft: buildPinnedPlanningMergedDraft(pinnedNotes, now),
+    synthesis:
+      '원태님은 기획을 말이나 아이디어가 아니라, 기록된 생각을 다시 꺼내고 엘시GPT의 판단과 갈비스/OpenClaw/Codex의 실행 기록을 엮어 성공률을 높이는 시스템으로 보고 있어요.',
+    sharedProblem: '기획을 감각이 아니라 반복 가능한 판단 구조로 만들 수 있을까?',
+    whyNow:
+      '생각회수기의 제품 방향도 이 흐름과 닮아 있어요. 흩어진 생각을 다시 꺼내고, 판단으로 연결해서 성공률을 높이려는 시도이기 때문이에요.',
+    nextQuestion: '이 흐름을 생각회수기의 대표 사용 사례로 삼을 수 있을까?',
+    createdAt: pinnedNotes[pinnedNotes.length - 1]?.created_at ?? now,
+    updatedAt: pinnedNotes[0]?.updated_at ?? pinnedNotes[0]?.created_at ?? now,
+    sharedIntent: '기획 성공률을 높이는 판단 시스템을 만들려는 생각',
+    sharedDecisionAxis: '기획 성공률 판단',
+    confidenceScore: 0.95,
+  };
+}
+
+function buildPinnedPlanningMergedDraft(notes: Note[], now: string): MergedThoughtDraft {
+  return {
+    id: 'merged-draft-planning-is-judgment-system',
+    flowId: 'thought-flow-planning-is-judgment-system',
+    title: '메모앱의 본질은 “잊은 생각을 다시 만나게 하는 것”이다',
+    body:
+      '나는 계속 메모앱을 만들고 싶다고 말해왔다. 처음에는 그냥 아이디어를 저장하는 앱이라고 생각했다. 하지만 반복해서 나온 생각들을 보면, 내가 만들고 싶은 것은 단순한 메모장이 아니다.\n\n' +
+      '내가 원하는 것은 내가 지나가며 말했던 생각, 잊어버린 생각, 아직 정리되지 않은 생각을 다시 회수해주는 앱이다. 메모는 적는 순간보다 나중에 다시 만나는 순간에 가치가 생긴다. 그런데 지금까지의 기록은 자주 흘러가버렸다. 말로 남긴 생각도, 대화 중에 나온 판단도, 기획으로 이어질 수 있었던 조각들도 시간이 지나면 어디에 있었는지 찾기 어려웠다.\n\n' +
+      '예전에는 말은 많지만 문서로 남기지 않는 모습을 답답하게 봤다. 나는 문서로 보고 싶었다. 그런데 돌아보면 나도 크게 다르지 않았다. 나도 많은 생각을 말했고, 여러 번 같은 문제를 다시 꺼냈지만, 정작 그것이 하나의 기획 문서나 판단 구조로 잘 남지는 않았다. 결국 문제는 기록을 했느냐 안 했느냐만이 아니었다. 문제는 기록한 것들이 다시 나에게 돌아오지 않는다는 것이었다.\n\n' +
+      '그래서 이 앱이 해야 할 일은 단순 저장이 아니다. 내가 음성이나 텍스트로 아무렇게나 남긴 말을 읽고, 그것이 일정인지, 알림인지, 기록으로 남겨야 할 생각인지, 특정 사람이나 고양이, 프로젝트에 붙어야 할 정보인지 구분해야 한다. 시간이 지나면 사라져도 되는 정보와 나중에 다시 회수해야 할 반복 생각도 달라야 한다.\n\n' +
+      '사용자가 처음부터 카테고리를 정리하게 만들면 안 된다. 사람은 생각이 떠오르는 순간에 완벽한 분류 체계를 만들지 못한다. 먼저 흘려보내듯이 기록하고, 앱이 그 기록들을 보며 자동으로 묶어줘야 한다. 그렇게 되면 메모는 단순한 저장소가 아니라 나 자신에게 다시 보여주는 생각의 피드가 된다.\n\n' +
+      '나는 기록을 통해 내 인공지능부를 만들고 싶다. 내가 반복해서 말한 생각들, 아직 문서가 되지 못한 기획들, 흘러가버린 아이디어들을 앱이 다시 모아주면, 나는 내가 어떤 문제를 계속 바라보고 있었는지 알 수 있다. 이 앱의 핵심 가치는 기록이 아니다. 핵심 가치는 망각된 생각의 회수다.\n\n' +
+      '그리고 이 문제의 출발점에는 내 기획력에 대한 자각이 있다. 예전에는 기획이 입으로만 하는 것이라고 생각한 적도 있다. 하지만 이제는 안다. 기획은 말이 아니라 구조다. 생각을 기록하고, 분류하고, 다시 꺼내 보고, 행동으로 바꾸는 과정이다. 그래서 이 앱은 나에게도 필요하다. 내가 말로 흘려보낸 생각을 다시 붙잡고, 그것을 기획으로 바꾸기 위해서.',
+    judgmentSummary: [
+      '이 앱의 핵심 가치는 단순 기록이 아니라 망각된 생각의 회수다.',
+      '메모는 처음부터 분류하는 것이 아니라, 흘려보낸 뒤 다시 묶이고 확장되어야 한다.',
+      '기획은 말이 아니라 생각을 구조화하고 다시 행동으로 바꾸는 과정이다.',
+    ],
+    sourceNoteIds: notes.map((note) => note.id),
+    createdAt: now,
+    status: 'draft',
+  };
+}
+
+function buildFallbackMergedThoughtDraft(
+  flowId: string,
+  title: string,
+  notes: Note[],
+  sharedProblem: string,
+  sharedDecisionAxis: string,
+  now: string,
+): MergedThoughtDraft {
+  const sourceInsights = notes
+    .slice(0, 5)
+    .map((note) => note.ai_summary || makeDraftSummary(note.raw_text))
+    .filter(Boolean);
+  const firstInsight = sourceInsights[0] ?? title;
+  const caseExamples = sourceInsights.slice(1, 4);
+  return {
+    id: `merged-draft-${slugifyFlowId(title)}-${notes.map((note) => note.id).join('-')}`,
+    flowId,
+    title,
+    body:
+      `나는 메모를 더 많이 쌓고 싶은 게 아니라, 잊힌 생각이 다시 돌아오는 경험을 만들고 싶었던 것 같다. 처음에는 ${firstInsight} 정도의 문제로 생각했다. 녹음이 빠르다는 점, 타이핑보다 말이 쉽다는 점, 떠오른 생각을 놓치지 않는다는 점이 중요해 보였다. 하지만 반복해서 보면 핵심은 단순한 입력 방식이 아니었다.\n\n` +
+      `결국 문제는 ${sharedProblem}이다. 나는 생각을 기록하는 순간보다, 시간이 지난 뒤 그 생각이 다시 나에게 돌아오는 순간에 더 큰 가치를 느끼고 있었다. 그래서 이 앱은 녹음기이면서도 그냥 녹음기가 아니어야 한다. 말한 내용이 전사되고, 비슷한 생각끼리 이어지고, 내가 어떤 문제를 계속 붙잡고 있었는지 다시 보여줘야 한다.\n\n` +
+      (caseExamples.length
+        ? `구체적인 사례를 보면 이 판단이 더 분명해진다. ${caseExamples.join(' ')} 이런 조각들은 서로 다른 메모처럼 보이지만, 실제로는 내가 제품 범위와 기획 방식을 계속 다시 묻고 있었다는 증거다.\n\n`
+        : '') +
+      `그래서 지금 정리된 방향은 저장소가 아니라 회수 경험이다. 모든 메모를 예쁘게 보관하는 것보다, 버려질 뻔한 생각이 다시 올라오고, 중복된 말들이 하나의 글로 자라고, 필요한 순간에 나를 다시 설득하는 구조가 더 중요하다.\n\n` +
+      `이 생각은 결국 내 기획력 문제와도 연결된다. 나는 예전에는 기획을 말로 설명하는 능력처럼 생각했지만, 이제는 기록된 판단을 다시 꺼내고 구조화하는 능력에 가깝다고 본다. 그래서 이 앱은 내가 만든 메모장이 아니라, 내가 놓친 판단을 다시 붙잡게 해주는 장치여야 한다. 지금의 결론은 분명하다. 나는 메모앱을 만들고 싶은 게 아니라, 생각이 사라지지 않고 다시 돌아와 기획으로 자라나는 경험을 만들고 싶다.`,
+    judgmentSummary: [sharedProblem, `${sharedDecisionAxis} 관점에서 다시 정리할 필요가 있다.`],
+    sourceNoteIds: notes.map((note) => note.id),
+    createdAt: now,
+    status: 'draft',
+  };
+}
+
+function makeVirtualThoughtFlowNote(title: string, index: number, now: string): Note {
+  const summaries = [
+    '기획력을 감각이 아니라 반복 가능한 판단 구조로 보려는 메모예요.',
+    '엘시GPT의 판단과 갈비스의 실행을 이어서 보는 대화 흐름이에요.',
+    '전략가 GPT를 통해 기획 판단의 품질을 높이려는 실험이에요.',
+  ];
+  return {
+    id: `sample-thought-flow-note-${index + 1}`,
+    raw_text: summaries[index] ?? title,
+    ai_title: title,
+    ai_summary: summaries[index] ?? title,
+    ai_tags: ['기획', '판단', '생각흐름'],
+    source_type: 'text',
+    created_at: now,
+    updated_at: now,
+  };
+}
+
+function slugifyFlowId(value: string) {
+  return value.toLowerCase().replace(/[^a-z0-9가-힣]+/g, '-').replace(/^-|-$/g, '') || 'thought';
+}
+
+function makeFlowTitle(sharedProblem: string, decisionAxis: string) {
+  if (sharedProblem.includes('기획')) return '기획력은 말이 아니라 판단 시스템이다';
+  if (sharedProblem.includes('잊힌 생각') || sharedProblem.includes('회수')) return '생각회수기는 메모장이 아니라 회수 경험이다';
+  if (decisionAxis.includes('MVP')) return 'v0.1은 무엇을 버릴지 정하는 싸움이다';
+  return decisionAxis;
+}
+
+function mostCommon(values: string[]) {
+  const counts = new Map<string, number>();
+  for (const value of values.filter(Boolean)) counts.set(value, (counts.get(value) ?? 0) + 1);
+  return Array.from(counts.entries()).sort((a, b) => b[1] - a[1])[0]?.[0] ?? '';
+}
+
+function overlapRatio(a: string[], b: string[]) {
+  const bSet = new Set(b);
+  const shared = a.filter((id) => bSet.has(id)).length;
+  return shared / Math.max(1, Math.min(a.length, b.length));
+}
+
+function normalizeFlowDedupeKey(title: string) {
+  return title.replace(/\s+/g, '').trim();
+}
+
+function buildThoughtFlowExportMarkdown(flow: ThoughtFlow) {
+  const draft = flow.mergedDraft;
+  const sourceSections = flow.notes.map((note, index) => {
+    const title = note.ai_title || makeDraftTitle(note.raw_text);
+    const summary = note.ai_summary || makeDraftSummary(note.raw_text);
+    return [
+      `### ${index + 1}. ${title}`,
+      '',
+      `- 날짜: ${formatDate(note.created_at)}`,
+      `- 요약: ${summary}`,
+      '',
+      '```text',
+      note.raw_text.trim(),
+      '```',
+    ].join('\n');
+  });
+
+  return [
+    `# ${draft.title}`,
+    '',
+    `내보낸 날짜: ${formatDate(new Date().toISOString())}`,
+    `원본 메모: ${flow.notes.length}개`,
+    '',
+    '## 확장된 메모',
+    '',
+    draft.body.trim(),
+    '',
+    '## 요약',
+    '',
+    ...(draft.judgmentSummary.length ? draft.judgmentSummary.map((item) => `- ${item}`) : [`- ${flow.synthesis}`]),
+    '',
+    '## 원본 메모와 전사 요약',
+    '',
+    ...sourceSections,
+    '',
+    '## 분석 메모',
+    '',
+    `- 공통 고민: ${flow.sharedProblem}`,
+    flow.sharedIntent ? `- 공통 의도: ${flow.sharedIntent}` : '',
+    flow.sharedDecisionAxis ? `- 연결된 판단축: ${flow.sharedDecisionAxis}` : '',
+    `- 다음 질문: ${flow.nextQuestion}`,
+  ]
+    .filter((line) => line !== '')
+    .join('\n');
+}
+
+function buildNoteExportMarkdown(note: Note, sourceLogs: Note[], relatedNotes: Note[]) {
+  const title = note.ai_title || makeDraftTitle(note.raw_text);
+  const logs = sourceLogs.length ? sourceLogs : [note];
+  const logSections = logs.map((log, index) => {
+    const logTitle = log.ai_title || makeDraftTitle(log.raw_text);
+    return [
+      `### ${index === 0 ? '원본' : `이어진 원본 ${index}`} · ${logTitle}`,
+      '',
+      `- 날짜: ${formatDate(log.created_at)}`,
+      log.ai_summary ? `- 요약: ${log.ai_summary}` : '',
+      '',
+      '```text',
+      log.raw_text.trim(),
+      '```',
+    ].filter((line) => line !== '').join('\n');
+  });
+  const relatedSections = relatedNotes.slice(0, 5).map((related, index) => (
+    `- ${index + 1}. ${related.ai_title || makeDraftTitle(related.raw_text)} · ${formatDate(related.created_at)}`
+  ));
+
+  return [
+    `# ${title}`,
+    '',
+    `내보낸 날짜: ${formatDate(new Date().toISOString())}`,
+    `메모 날짜: ${formatDate(note.created_at)}`,
+    '',
+    '## 요약',
+    '',
+    note.ai_summary || makeDraftSummary(note.raw_text),
+    '',
+    '## 전사 원문',
+    '',
+    '```text',
+    note.raw_text.trim(),
+    '```',
+    '',
+    logs.length > 1 ? '## 이어진 원본 로그' : '',
+    logs.length > 1 ? '' : '',
+    ...(logs.length > 1 ? logSections : []),
+    relatedSections.length ? '## 다시 이어볼 생각' : '',
+    relatedSections.length ? '' : '',
+    ...relatedSections,
+  ]
+    .filter((line) => line !== '')
+    .join('\n');
+}
+
+function makeSafeFileName(value: string) {
+  const safe = value.trim().replace(/[\\/:*?"<>|]/g, '-').replace(/\s+/g, ' ').slice(0, 48);
+  return safe || 'thought-flow-export';
+}
+
+function makeReadableConnectionReason(source: Note, related: Note, candidate: RelatedCandidate) {
+  const sourceMeaning = inferMeaning(source);
+  const relatedMeaning = inferMeaning(related);
+  const sourceTitle = source.ai_title || makeDraftTitle(source.raw_text);
+  const relatedTitle = related.ai_title || makeDraftTitle(related.raw_text);
+  if (sourceMeaning.reusePurpose === relatedMeaning.reusePurpose) {
+    return `“${sourceTitle}”와 “${relatedTitle}”는 둘 다 ${sourceMeaning.reusePurpose} 다시 보면 좋은 메모라 함께 보면 좋아요.`;
+  }
+  if (sourceMeaning.intent === relatedMeaning.intent) {
+    return `이 메모는 ‘${sourceMeaning.intent}’이에요. “${relatedTitle}”도 같은 의도라 이어서 보면 판단이 쉬워져요.`;
+  }
+  if (sourceMeaning.situation === relatedMeaning.situation) {
+    return `둘 다 ‘${sourceMeaning.situation}’에서 나온 생각이라 같은 맥락으로 묶였어요.`;
+  }
+  return candidate.reasons[0] ?? `“${relatedTitle}”와 함께 보면 지금 생각의 배경을 더 잘 이해할 수 있어요.`;
+}
+
+function makeUseSuggestion(note: Note) {
+  const text = noteText(note);
+  if (text.includes('v01') || text.includes('v0.1') || text.includes('mvp') || text.includes('핵심') || text.includes('버릴')) {
+    return 'v0.1에서 무엇을 남기고 무엇을 버릴지 정할 때 도움이 됩니다.';
+  }
+  if (text.includes('기획') || text.includes('문서') || text.includes('판단')) {
+    return '지금 기획 판단을 더 선명하게 만들 때 다시 참고할 수 있습니다.';
+  }
+  if (text.includes('마케팅') || text.includes('랜딩') || text.includes('이메일') || text.includes('광고')) {
+    return '나중에 수요 검증이나 랜딩페이지 문구를 만들 때 재료로 쓸 수 있습니다.';
+  }
+  if (text.includes('운동') || text.includes('무릎') || text.includes('러닝') || text.includes('건강')) {
+    return '오늘 컨디션과 루틴을 조정할 때 과거 신호로 참고할 수 있습니다.';
+  }
+  if (text.includes('고양이') || text.includes('와이프') || text.includes('일상')) {
+    return '일상에서 놓치기 쉬운 관심사를 다시 챙기는 데 쓸 수 있습니다.';
+  }
+  if (text.includes('앱') || text.includes('생각') || text.includes('회수')) {
+    return '앱의 정체성과 회수 경험을 더 날카롭게 다듬을 때 도움이 됩니다.';
+  }
+  return '지금의 생각과 연결해 다음 판단의 재료로 쓸 수 있습니다.';
+}
+
+function retrieveCandidates(note: Note, notes: Note[], feedback: RetrievalFeedbackMap) {
+  const byId = new Map<string, RelatedCandidate>();
+  const routes = [
+    (candidate: Note) => keywordOverlap(inferMeaning(note), inferMeaning(candidate)) > 0,
+    (candidate: Note) => inferMeaning(candidate).intent === inferMeaning(note).intent,
+    (candidate: Note) => inferMeaning(candidate).problem === inferMeaning(note).problem,
+    (candidate: Note) => inferMeaning(candidate).reusePurpose === inferMeaning(note).reusePurpose,
+    (candidate: Note) => inferMeaning(candidate).decisionAxis === inferMeaning(note).decisionAxis,
+    (candidate: Note) => daysSince(candidate.created_at) >= 3,
+    (candidate: Note) => feedback[candidate.id]?.status === 'useful',
+  ];
+
+  for (const candidate of notes) {
+    if (candidate.id === note.id || feedback[candidate.id]?.status === 'hidden') continue;
+    if (routes.some((route) => route(candidate))) {
+      byId.set(candidate.id, scoreRelatedNote(note, candidate, feedback));
+    }
+  }
+
+  return Array.from(byId.values())
+    .filter((item) => item.score > 0)
+    .sort((a, b) => b.score - a.score)
+    .slice(0, 20);
+}
+
+function rankRelatedNotes(note: Note, notes: Note[]) {
+  return retrieveCandidates(note, notes, {});
+}
+
+function scoreRelatedNote(source: Note, candidate: Note, feedback: RetrievalFeedbackMap = {}): RelatedCandidate {
+  const sourceMeaning = inferMeaning(source);
+  const candidateMeaning = inferMeaning(candidate);
+  const reasons: string[] = [];
+  const sharedKeywords = candidateMeaning.keywords.filter((keyword) => sourceMeaning.keywords.includes(keyword));
+  const keywordScore = Math.min(2, sharedKeywords.length * 0.5);
+  const intentScore = sourceMeaning.intent === candidateMeaning.intent ? 4 : 0;
+  const problemScore = sourceMeaning.problem === candidateMeaning.problem ? 4 : 0;
+  const reusePurposeScore = sourceMeaning.reusePurpose === candidateMeaning.reusePurpose ? 4 : 0;
+  const decisionAxisScore = sourceMeaning.decisionAxis === candidateMeaning.decisionAxis ? 3 : 0;
+  const recencyContextScore = daysSince(candidate.created_at) >= 3 ? 1 : 0;
+  const userFeedbackScore = feedback[candidate.id]?.status === 'useful' ? 2 + Math.min(3, feedback[candidate.id]?.usedCount ?? 0) : feedback[candidate.id]?.status === 'later' ? 1 : 0;
+  const wordScore = Math.min(1, sharedWordScore(source, candidate) * 0.25);
+  const total = keywordScore + intentScore + problemScore + reusePurposeScore + decisionAxisScore + recencyContextScore + userFeedbackScore + wordScore;
+
+  if (sharedKeywords.length > 0) reasons.push(`같은 주제: ${sharedKeywords.slice(0, 4).join(', ')} 키워드를 공유합니다.`);
+  if (intentScore > 0) reasons.push(`같은 의도: 둘 다 ‘${sourceMeaning.intent}’ 메모입니다.`);
+  if (problemScore > 0) reasons.push(`같은 문제: 둘 다 ‘${sourceMeaning.problem}’을 풀고 있습니다.`);
+  if (reusePurposeScore > 0) reasons.push(`같은 재사용 목적: 나중에 ‘${sourceMeaning.reusePurpose}’ 때 같이 보면 좋습니다.`);
+  if (decisionAxisScore > 0) reasons.push(`같은 판단 축: ‘${sourceMeaning.decisionAxis}’ 판단과 연결됩니다.`);
+  if (recencyContextScore > 0) reasons.push(`${daysSince(candidate.created_at)}일 동안 묻혀 있던 생각입니다.`);
+  if (userFeedbackScore > 0) reasons.push('이전에 도움 된 패턴과 비슷합니다.');
+
+  return {
+    note: candidate,
+    score: Math.round(total * 10) / 10,
+    scoreBreakdown: {
+      keywordScore,
+      intentScore,
+      problemScore,
+      reusePurposeScore,
+      decisionAxisScore,
+      recencyContextScore,
+      userFeedbackScore,
+      total: Math.round(total * 10) / 10,
+    },
+    reasons,
+    meaning: candidateMeaning,
+  };
+}
+
+function inferMeaning(note: Note): NoteMeaning {
+  const text = noteText(note);
+  const keywords = Array.from(new Set([...(note.ai_tags ?? []), ...inferTags(note), ...importantWords(text).slice(0, 8)]));
+  const intent = note.intent ?? inferIntent(text);
+  const problem = note.problem ?? inferProblem(text, intent);
+  const situation = note.situation ?? inferSituation(text);
+  const reusePurpose = note.reusePurpose ?? inferReusePurpose(text);
+  const decisionAxis = note.decisionAxis ?? inferDecisionAxis(text, intent, reusePurpose);
+  return {
+    id: note.id,
+    rawText: note.raw_text,
+    title: note.ai_title ?? makeDraftTitle(note.raw_text),
+    summary: note.ai_summary ?? makeDraftSummary(note.raw_text),
+    keywords,
+    intent,
+    problem,
+    situation,
+    reusePurpose,
+    decisionAxis,
+    emotion: note.emotion ?? inferEmotion(text),
+    lifeArea: note.lifeArea ?? inferLifeArea(text),
+    memoryType: note.memoryType ?? inferMemoryType(text),
+    createdAt: note.created_at,
+    lastViewedAt: null,
+    lastSurfacedAt: null,
+    surfacedCount: 0,
+    usedCount: 0,
+    hiddenCount: 0,
+  };
+}
+
+function keywordOverlap(a: NoteMeaning, b: NoteMeaning) {
+  return b.keywords.filter((keyword) => a.keywords.includes(keyword)).length;
+}
+
+function inferIntent(text: string) {
+  if (text.includes('준비') || text.includes('미리') || text.includes('언제든')) return '나중에 필요한 것을 미리 준비하려는 생각';
+  if (text.includes('기획') || text.includes('mvp') || text.includes('v0.1') || text.includes('핵심') || text.includes('버릴')) return '제품 방향과 범위를 정하려는 생각';
+  if (text.includes('마케팅') || text.includes('랜딩') || text.includes('이메일') || text.includes('광고')) return '사용자 반응과 수요를 확인하려는 생각';
+  if (text.includes('운동') || text.includes('무릎') || text.includes('러닝') || text.includes('건강')) return '몸 상태를 관리하고 루틴을 조정하려는 생각';
+  if (text.includes('화') || text.includes('불안') || text.includes('피로') || text.includes('아쉽')) return '감정 상태를 이해하고 정리하려는 생각';
+  if (text.includes('고양이') || text.includes('와이프')) return '가까운 관계와 일상을 챙기려는 생각';
+  if (text.includes('만들') || text.includes('아이디어') || text.includes('앱')) return '아이디어를 제품이나 작업으로 발전시키려는 생각';
+  return '나중에 다시 참고하려고 남긴 생각';
+}
+
+function inferProblem(text: string, intent: string) {
+  if (text.includes('기획력') || text.includes('엘시') || text.includes('갈비스') || text.includes('패배')) return '어떻게 기획을 감각이 아니라 반복 가능한 판단 시스템으로 만들 것인가';
+  if (text.includes('회수') || text.includes('잊') || text.includes('다시')) return '어떻게 잊힌 생각을 다시 만나게 할 것인가';
+  if (text.includes('mvp') || text.includes('v0.1') || text.includes('핵심') || text.includes('버릴')) return '무엇을 v0.1에 남기고 무엇을 버릴 것인가';
+  if (text.includes('랜딩') || text.includes('마케팅') || text.includes('이메일') || text.includes('광고')) return '어떻게 초기 수요를 검증하고 알릴 것인가';
+  if (text.includes('운동') || text.includes('무릎') || text.includes('러닝')) return '어떻게 무리하지 않고 건강 루틴을 지속할 것인가';
+  if (text.includes('고양이')) return '어떻게 일상에서 놓친 돌봄을 다시 챙길 것인가';
+  return intent;
+}
+
+function inferDecisionAxis(text: string, intent: string, reusePurpose: string) {
+  if (text.includes('버릴') || text.includes('핵심') || text.includes('v0.1') || text.includes('mvp')) return 'MVP 범위 판단';
+  if (text.includes('기획') || text.includes('문서') || text.includes('기록') || text.includes('엘시') || text.includes('갈비스')) return '기획 성공률 판단';
+  if (text.includes('웹') || text.includes('아이폰') || text.includes('출시')) return '접근성과 배포 판단';
+  if (text.includes('마케팅') || text.includes('랜딩') || text.includes('광고')) return '수요 검증 판단';
+  if (text.includes('운동') || text.includes('무릎')) return '건강 루틴 지속 판단';
+  if (text.includes('이미지') || text.includes('캐릭터') || text.includes('분신')) return '제품 애착 판단';
+  return reusePurpose || intent;
+}
+
+function inferEmotion(text: string) {
+  if (text.includes('화') || text.includes('답답')) return '답답함';
+  if (text.includes('불안') || text.includes('걱정')) return '불안';
+  if (text.includes('아쉽')) return '아쉬움';
+  if (text.includes('좋') || text.includes('잘 맞')) return '긍정';
+  if (text.includes('힘들')) return '부담';
+  return '중립';
+}
+
+function inferSituation(text: string) {
+  if (text.includes('최근') || text.includes('요즘') || text.includes('현재')) return '최근 상태를 점검하는 중';
+  if (text.includes('대화') || text.includes('gpt') || text.includes('갈비스') || text.includes('엘시')) return 'AI와 기획 대화를 하던 중';
+  if (text.includes('출시') || text.includes('웹') || text.includes('랜딩')) return '배포와 접근 방법을 고민하는 중';
+  if (text.includes('운동') || text.includes('뛰') || text.includes('무릎')) return '운동 루틴을 실행하며 몸 상태를 관찰하는 중';
+  if (text.includes('고양이') || text.includes('와이프')) return '집과 일상에서 떠오른 생각';
+  if (text.includes('문서') || text.includes('기록')) return '기록 방식과 문서화를 돌아보는 중';
+  return '생각이 떠올라 임시로 붙잡는 중';
+}
+
+function inferLifeArea(text: string) {
+  if (text.includes('운동') || text.includes('건강') || text.includes('무릎') || text.includes('러닝')) return '생활';
+  if (text.includes('와이프') || text.includes('고양이') || text.includes('깐지')) return '관계';
+  if (text.includes('화') || text.includes('불안') || text.includes('피로') || text.includes('아쉽')) return '감정';
+  if (text.includes('앱') || text.includes('프로젝트') || text.includes('기획') || text.includes('출시')) return '프로젝트';
+  if (text.includes('아이디어') || text.includes('이미지') || text.includes('캐릭터')) return '아이디어';
+  if (text.includes('공부') || text.includes('배우')) return '공부';
+  if (text.includes('구매') || text.includes('주문') || text.includes('사야')) return '구매';
+  return '아이디어';
+}
+
+function inferMemoryType(text: string) {
+  if (text.includes('?') || text.includes('무엇') || text.includes('어떨까') || text.includes('있을까')) return '질문';
+  if (text.includes('고민') || text.includes('정할') || text.includes('판단') || text.includes('버릴')) return '결정 고민';
+  if (text.includes('화') || text.includes('불안') || text.includes('아쉽') || text.includes('깨달았다')) return '회고';
+  if (text.includes('운동') || text.includes('무릎') || text.includes('고양이')) return '감정 기록';
+  if (text.includes('구매') || text.includes('주문') || text.includes('사냥감')) return '구매 메모';
+  if (text.includes('아이디어') || text.includes('앱') || text.includes('기능')) return '아이디어';
+  return '회고';
+}
+
+function inferReusePurpose(text: string) {
+  if (text.includes('v0.1') || text.includes('mvp') || text.includes('핵심') || text.includes('버릴')) return 'MVP 범위를 정할 때';
+  if (text.includes('기획') || text.includes('문서') || text.includes('기록')) return '기획 문서를 다듬을 때';
+  if (text.includes('랜딩') || text.includes('이메일') || text.includes('마케팅') || text.includes('광고')) return '수요 검증과 홍보 방식을 정할 때';
+  if (text.includes('웹') || text.includes('아이폰') || text.includes('출시')) return '실사용 배포 경로를 정할 때';
+  if (text.includes('운동') || text.includes('무릎') || text.includes('러닝')) return '건강 루틴을 조정할 때';
+  if (text.includes('고양이') || text.includes('와이프')) return '가족과 일상을 챙길 때';
+  if (text.includes('이미지') || text.includes('캐릭터') || text.includes('분신')) return '제품 애착 경험을 설계할 때';
+  return '비슷한 생각을 다시 판단할 때';
+}
+
+function daysSince(value: string) {
+  const time = new Date(value).getTime();
+  if (!Number.isFinite(time)) return 0;
+  return Math.max(0, Math.floor((Date.now() - time) / (24 * 60 * 60 * 1000)));
+}
+
+function filterNotes(notes: Note[], query: string) {
+  const clean = query.trim().toLowerCase();
+  if (!clean) return notes;
+  return notes.filter((note) => noteText(note).includes(clean));
+}
+
+function noteText(note: Note) {
+  return [note.raw_text, note.ai_title, note.ai_summary, ...(note.ai_tags ?? [])].filter(Boolean).join(' ').toLowerCase();
+}
+
+function findRelatedNotes(note: Note, notes: Note[]) {
+  return rankRelatedNotes(note, notes)
+    .filter((item) => item.score >= 3)
+    .slice(0, 3)
+    .map((item) => item.note);
+}
+
+function sharedWordScore(a: Note, b: Note) {
+  const wordsA = importantWords(noteText(a));
+  const wordsB = new Set(importantWords(noteText(b)));
+  return wordsA.filter((word) => wordsB.has(word)).length;
+}
+
+function importantWords(text: string) {
+  return text
+    .split(/\s+/)
+    .map((word) => word.replace(/[^0-9a-zA-Z가-힣]/g, ''))
+    .filter((word) => word.length >= 3)
+    .slice(0, 24);
+}
+
+function makeFollowUpQuestions(note: Note) {
+  const tags = inferTags(note);
+  if (tags.includes('앱')) {
+    return ['이 생각이 사용자에게 가장 먼저 보이면 좋은 순간은 언제일까요?', '이 기능 없이도 MVP가 성립하는지 나눠볼까요?'];
+  }
+  if (tags.includes('마케팅')) {
+    return ['이 메시지를 한 문장 카피로 줄이면 어떻게 될까요?', '어떤 장면이나 예시로 보여주면 바로 이해될까요?'];
+  }
+  if (tags.includes('게임')) {
+    return ['이 아이디어가 플레이 감정에 어떤 변화를 만들까요?', '작게 테스트하려면 어떤 장면 하나면 충분할까요?'];
+  }
+  return ['이 생각의 핵심을 한 문장으로 줄이면 무엇일까요?', '나중에 이어보기 위해 어떤 맥락을 더 남기면 좋을까요?'];
+}
+
+function inferCategory(note: Note) {
+  const tags = note.ai_tags?.length ? note.ai_tags : inferTags(note);
+  const preferred = ['UX', '기획', '사업', '마케팅', '게임', '개발', '음성', '아이디어'];
+  const text = noteText(note);
+  if (text.includes('ux') || text.includes('ui') || text.includes('화면')) return 'UX';
+  if (text.includes('사업') || text.includes('수익') || text.includes('비즈니스')) return '사업';
+  if (text.includes('개발') || text.includes('코드') || text.includes('서버')) return '개발';
+  const normalized = tags.map((tag) => (tag === '앱' ? '기획' : tag === '생각' ? '아이디어' : tag));
+  return normalized.find((tag) => preferred.includes(tag)) ?? normalized[0] ?? '아이디어';
+}
+
+function inferTags(note: Note) {
+  return inferTagsFromText(noteText(note), note.source_type);
+}
+
+function inferTagsFromText(rawText: string, sourceType: SourceType) {
+  const text = rawText.toLowerCase();
+  const tags: string[] = [];
+  if (sourceType === 'voice') tags.push('음성');
+  if (text.includes('앱') || text.includes('ui') || text.includes('ux')) tags.push('앱');
+  if (text.includes('마케팅') || text.includes('쇼츠') || text.includes('홍보')) tags.push('마케팅');
+  if (text.includes('게임') || text.includes('통나무')) tags.push('게임');
+  if (tags.length === 0) tags.push('생각');
+  return tags;
+}
+
+function makeDraftTitle(text: string) {
+  const cleaned = text.trim().replace(/\s+/g, ' ');
+  return cleaned.length > 28 ? `${cleaned.slice(0, 28)}...` : cleaned || '새 생각';
+}
+
+function makeDraftSummary(text: string) {
+  const cleaned = text.trim().replace(/\s+/g, ' ');
+  return cleaned.length > 120 ? `${cleaned.slice(0, 120)}...` : cleaned;
+}
+
+function groupNotesByDate(notes: Note[]): ArchiveDateGroup[] {
+  const groups = new Map<string, ArchiveDateGroup>();
+
+  for (const note of notes) {
+    const date = new Date(note.created_at);
+    const key = Number.isNaN(date.getTime()) ? note.created_at.slice(0, 10) : date.toISOString().slice(0, 10);
+    const current = groups.get(key) ?? { key, title: formatArchiveDateHeader(note.created_at), notes: [] };
+    current.notes.push(note);
+    groups.set(key, current);
+  }
+
+  return Array.from(groups.values());
+}
+
+
+function isSameLocalDay(value: string, date: Date) {
+  const target = new Date(value);
+  return !Number.isNaN(target.getTime())
+    && target.getFullYear() === date.getFullYear()
+    && target.getMonth() === date.getMonth()
+    && target.getDate() === date.getDate();
+}
+
+function isProcessingVoiceNote(note: Note, voiceJob?: VoiceJob) {
+  if (voiceJob && ['saving', 'uploading', 'transcribing'].includes(voiceJob.status)) return true;
+  return note.raw_text.includes('전사하는 중입니다') || note.raw_text.includes('업로드하는 중입니다');
+}
+
+function formatArchiveDateHeader(value: string) {
+  try {
+    return new Intl.DateTimeFormat('ko-KR', {
+      month: 'long',
+      day: 'numeric',
+      weekday: 'short',
+    }).format(new Date(value));
+  } catch {
+    return value;
+  }
+}
+
+function formatDate(value: string) {
+  try {
+    return new Intl.DateTimeFormat('ko-KR', {
+      month: 'short',
+      day: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+    }).format(new Date(value));
+  } catch {
+    return value;
+  }
+}
+
+function isLocalAudioUri(value: string) {
+  return value.startsWith('file://') || value.startsWith('content://') || value.startsWith('ph://');
+}
+
+function getAudioExtension(uri: string) {
+  const clean = uri.split('?')[0];
+  const extension = clean.split('.').pop()?.toLowerCase();
+  return extension && extension.length <= 5 ? extension : 'm4a';
+}
+
+function contentTypeForExtension(extension: string) {
+  switch (extension) {
+    case 'wav':
+      return 'audio/wav';
+    case 'mp3':
+      return 'audio/mpeg';
+    case 'caf':
+      return 'audio/x-caf';
+    case 'm4a':
+    default:
+      return 'audio/mp4';
+  }
+}
+
+async function describeFunctionError(error: unknown) {
+  if (error && typeof error === 'object' && 'context' in error) {
+    const context = (error as { context?: Response }).context;
+    if (context) {
+      try {
+        const text = await context.text();
+        if (text) return text;
+      } catch {
+        // Fall through to the generic error message.
+      }
+    }
+  }
+
+  return error instanceof Error ? error.message : String(error);
+}
+
+function showError(title: string, error: unknown) {
+  const message = error instanceof Error ? error.message : String(error);
+  Alert.alert(title, message);
+}
+
+const styles = StyleSheet.create({
+  safeArea: {
+    flex: 1,
+    width: '100%',
+    maxWidth: '100%',
+    overflow: 'hidden',
+    backgroundColor: '#fbfaf7',
+  },
+  container: {
+    flex: 1,
+    width: Platform.OS === 'web' ? 398 : '100%',
+    maxWidth: '100%',
+    minWidth: 0,
+    alignSelf: 'flex-start',
+    paddingHorizontal: 16,
+    paddingTop: 10,
+    paddingBottom: 12,
+    gap: 12,
+    overflow: 'hidden',
+  },
+  header: {
+    gap: 4,
+  },
+  kicker: {
+    color: '#7c5c2e',
+    fontSize: 13,
+    fontWeight: '700',
+  },
+  title: {
+    color: '#171412',
+    fontSize: 25,
+    fontWeight: '900',
+  },
+  status: {
+    color: '#7a746b',
+    fontSize: 13,
+  },
+  tabContent: {
+    flex: 1,
+    gap: 10,
+  },
+  tabPagerViewport: {
+    flex: 1,
+    overflow: 'hidden',
+  },
+  feedTopBar: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'flex-start',
+    paddingHorizontal: 2,
+    paddingBottom: 2,
+    gap: 10,
+  },
+  feedTitleWrap: {
+    flex: 1,
+    minWidth: 0,
+  },
+  feedTitle: {
+    color: '#171412',
+    fontSize: 24,
+    fontWeight: '900',
+  },
+  feedHint: {
+    color: '#8f8578',
+    fontSize: 12,
+    marginTop: 2,
+  },
+  feedActionRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'flex-end',
+    flexShrink: 0,
+    gap: 10,
+  },
+  todayRetrievalCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    backgroundColor: '#edf4ef',
+    borderColor: '#cfe4d6',
+    borderWidth: 1,
+    borderRadius: 22,
+    padding: 15,
+    gap: 12,
+  },
+  todayRetrievalTextWrap: {
+    flex: 1,
+    gap: 4,
+  },
+  todayRetrievalKicker: {
+    color: '#d94c3d',
+    fontSize: 12,
+    fontWeight: '900',
+  },
+  todayRetrievalTitle: {
+    color: '#171412',
+    fontSize: 16,
+    fontWeight: '900',
+    lineHeight: 21,
+  },
+  todayRetrievalBody: {
+    color: '#5f554a',
+    fontSize: 13,
+    lineHeight: 18,
+  },
+  todayRetrievalArrow: {
+    color: '#d94c3d',
+    fontSize: 24,
+    fontWeight: '900',
+  },
+  todayMainFlowCard: {
+    backgroundColor: '#fffefd',
+    borderColor: '#eee7df',
+    borderWidth: 1,
+    borderRadius: 16,
+    padding: 20,
+    gap: 10,
+    minHeight: 156,
+    justifyContent: 'center',
+  },
+  todayMainFlowTitle: {
+    color: '#171412',
+    fontSize: 23,
+    fontWeight: '900',
+    lineHeight: 32,
+  },
+  todayMainFlowMeta: {
+    color: '#9a8f82',
+    fontSize: 13,
+    fontWeight: '800',
+  },
+  todayGrownEmptyCard: {
+    backgroundColor: '#fffefd',
+    borderColor: '#eee7df',
+    borderWidth: 1,
+    borderRadius: 16,
+    padding: 18,
+    gap: 8,
+  },
+  todayGrownEmptyTitle: {
+    color: '#171412',
+    fontSize: 18,
+    fontWeight: '900',
+    lineHeight: 24,
+  },
+  todayGrownEmptyBody: {
+    color: '#7a746b',
+    fontSize: 13,
+    lineHeight: 19,
+  },
+  todayRecorderCard: {
+    width: '100%',
+    maxWidth: '100%',
+    backgroundColor: '#fffefd',
+    borderColor: '#eee7df',
+    borderWidth: 1,
+    borderRadius: 18,
+    paddingHorizontal: 22,
+    paddingTop: 18,
+    paddingBottom: 22,
+    gap: 18,
+    alignItems: 'center',
+    overflow: 'visible',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.08,
+    shadowRadius: 18,
+    elevation: 3,
+  },
+  todayRecorderCardActive: {
+    backgroundColor: '#fff7f4',
+    borderColor: '#f0b7ad',
+  },
+  todayMicHaloOuter: {
+    width: 148,
+    height: 126,
+    borderRadius: 74,
+    backgroundColor: '#fff5f2',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingBottom: 0,
+    marginTop: 0,
+    shadowColor: '#ef6a5a',
+    shadowOffset: { width: 0, height: 10 },
+    shadowOpacity: 0.14,
+    shadowRadius: 18,
+    elevation: 2,
+  },
+  todayMicHaloInner: {
+    width: 104,
+    height: 104,
+    borderRadius: 52,
+    backgroundColor: '#ff685a',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  todayMicIcon: {
+    fontSize: 43,
+  },
+  todayRecorderHeaderRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'flex-start',
+    gap: 10,
+  },
+  todayRecorderTextWrap: {
+    flex: 1,
+    minWidth: 0,
+  },
+  todayRecorderKicker: {
+    color: '#e7b76a',
+    fontSize: 12,
+    fontWeight: '900',
+  },
+  todayRecorderTitle: {
+    color: '#171412',
+    fontSize: 22,
+    fontWeight: '900',
+    lineHeight: 29,
+    marginTop: 4,
+  },
+  todayRecorderTimer: {
+    color: '#171412',
+    backgroundColor: '#e7b76a',
+    borderRadius: 999,
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    fontSize: 11,
+    fontWeight: '900',
+    overflow: 'hidden',
+    flexShrink: 0,
+  },
+  todayWaveformRow: {
+    width: '100%',
+    height: 46,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 8,
+    paddingHorizontal: 10,
+  },
+  todayWaveformBar: {
+    flex: 1,
+    borderRadius: 999,
+    backgroundColor: '#e8ded5',
+    opacity: 0.95,
+  },
+  todayRecordButton: {
+    width: '100%',
+    backgroundColor: '#ff6257',
+    borderRadius: 15,
+    paddingVertical: 17,
+    alignItems: 'center',
+    justifyContent: 'center',
+    flexDirection: 'row',
+    gap: 8,
+  },
+  todayRecordButtonActive: {
+    backgroundColor: '#f05b49',
+  },
+  todayRecordButtonIcon: {
+    color: '#fff',
+    fontSize: 14,
+    fontWeight: '900',
+  },
+  todayRecordButtonText: {
+    color: '#fff',
+    fontSize: 15,
+    fontWeight: '900',
+  },
+  todayRecorderSubtitle: {
+    color: '#d7c7b6',
+    fontSize: 13,
+    lineHeight: 19,
+  },
+  mutedActionText: {
+    color: '#9b9185',
+    fontSize: 13,
+    fontWeight: '700',
+  },
+  inlineComposerCard: {
+    backgroundColor: '#fff',
+    borderColor: '#e8e1d8',
+    borderWidth: 1,
+    borderRadius: 18,
+    padding: 12,
+    gap: 10,
+  },
+  composerActionRow: {
+    flexDirection: 'row',
+    justifyContent: 'flex-end',
+    alignItems: 'center',
+    gap: 8,
+  },
+  ghostTextButton: {
+    borderRadius: 999,
+    paddingHorizontal: 12,
+    paddingVertical: 9,
+  },
+  ghostTextButtonText: {
+    color: '#8f8578',
+    fontSize: 13,
+    fontWeight: '800',
+  },
+  card: {
+    backgroundColor: '#fffefd',
+    borderColor: '#eee7df',
+    borderWidth: 1,
+    borderRadius: 16,
+    padding: 16,
+    gap: 10,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.08,
+    shadowRadius: 16,
+    elevation: 2,
+  },
+  captureCard: {
+    backgroundColor: '#fffefd',
+    borderColor: '#eee7df',
+    borderWidth: 1,
+    borderRadius: 24,
+    padding: 16,
+    gap: 14,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.08,
+    shadowRadius: 16,
+    elevation: 2,
+  },
+  captureHeaderRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    gap: 12,
+  },
+  cardTitle: {
+    color: '#171412',
+    fontSize: 17,
+    fontWeight: '900',
+  },
+  helpText: {
+    color: '#7a746b',
+    fontSize: 13,
+    lineHeight: 18,
+  },
+  input: {
+    backgroundColor: '#fff',
+    borderColor: '#e7d7bf',
+    borderWidth: 1,
+    borderRadius: 14,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    fontSize: 15,
+  },
+  buttonRow: {
+    flexDirection: 'row',
+    gap: 10,
+  },
+  primaryButton: {
+    flex: 1,
+    backgroundColor: '#ef6a5a',
+    borderRadius: 14,
+    paddingVertical: 13,
+    alignItems: 'center',
+  },
+  savedPrimaryButton: {
+    backgroundColor: '#4f6f3f',
+  },
+  primaryButtonText: {
+    color: '#fff',
+    fontWeight: '800',
+  },
+  secondaryButton: {
+    flex: 1,
+    backgroundColor: '#efe4d4',
+    borderRadius: 14,
+    paddingVertical: 13,
+    alignItems: 'center',
+  },
+  secondaryButtonText: {
+    color: '#33291d',
+    fontWeight: '800',
+  },
+  ghostButton: {
+    flex: 1,
+    borderColor: '#e8e1d8',
+    borderWidth: 1,
+    borderRadius: 14,
+    paddingVertical: 13,
+    alignItems: 'center',
+    backgroundColor: '#fff',
+  },
+  ghostButtonText: {
+    color: '#8f8578',
+    fontWeight: '800',
+  },
+  disabledButton: {
+    opacity: 0.45,
+  },
+  smallGhostButton: {
+    alignSelf: 'flex-start',
+    backgroundColor: '#f1e5d5',
+    borderRadius: 999,
+    paddingHorizontal: 10,
+    paddingVertical: 7,
+  },
+  smallGhostButtonText: {
+    color: '#7c5c2e',
+    fontSize: 12,
+    fontWeight: '800',
+  },
+  voiceHeroButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 14,
+    backgroundColor: '#eaf4ee',
+    borderColor: '#c8dfd0',
+    borderWidth: 1,
+    borderRadius: 22,
+    padding: 16,
+  },
+  voiceHeroButtonActive: {
+    backgroundColor: '#ffe3df',
+    borderColor: '#efb7ad',
+  },
+  voiceHeroIcon: {
+    fontSize: 30,
+  },
+  voiceHeroTextWrap: {
+    flex: 1,
+  },
+  voiceHeroTitle: {
+    color: '#171412',
+    fontSize: 17,
+    fontWeight: '900',
+  },
+  voiceHeroSubtitle: {
+    color: '#6d796f',
+    fontSize: 13,
+    marginTop: 3,
+  },
+  quickTextRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-end',
+    gap: 10,
+  },
+  quickInput: {
+    minHeight: 48,
+    maxHeight: 128,
+    backgroundColor: '#fff',
+    borderColor: '#e7d7bf',
+    borderWidth: 1,
+    borderRadius: 18,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    fontSize: 15,
+    textAlignVertical: 'top',
+  },
+  sendButton: {
+    backgroundColor: '#ef6a5a',
+    borderRadius: 16,
+    paddingHorizontal: 17,
+    paddingVertical: 14,
+  },
+  sendButtonText: {
+    color: '#fff',
+    fontWeight: '900',
+  },
+  listHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  sectionTitle: {
+    color: '#171412',
+    fontSize: 19,
+    fontWeight: '900',
+  },
+  sectionHint: {
+    color: '#8f8578',
+    fontSize: 12,
+    marginTop: 2,
+  },
+  linkButtonText: {
+    color: '#7c5c2e',
+    fontWeight: '800',
+  },
+  loader: {
+    marginTop: 32,
+  },
+  noteList: {
+    gap: 0,
+    paddingBottom: 176,
+  },
+  empty: {
+    color: '#7a746b',
+    textAlign: 'center',
+    marginTop: 30,
+  },
+  noteCard: {
+    backgroundColor: '#fffefd',
+    borderColor: '#eee7df',
+    borderWidth: 1,
+    borderRadius: 16,
+    paddingVertical: 15,
+    paddingHorizontal: 15,
+    gap: 8,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.05,
+    shadowRadius: 14,
+    elevation: 1,
+  },
+  processingCard: {
+    borderColor: '#d6ddeb',
+    backgroundColor: '#fbfcff',
+  },
+  failedCard: {
+    borderColor: '#efc4bd',
+    backgroundColor: '#fff8f6',
+  },
+  noteMetaRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  noteMetaLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 7,
+  },
+  noteType: {
+    color: '#7c5c2e',
+    fontWeight: '800',
+    fontSize: 14,
+  },
+  singleCategory: {
+    color: '#7c5c2e',
+    backgroundColor: '#efe4d4',
+    borderRadius: 999,
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    fontSize: 11,
+    fontWeight: '900',
+  },
+  noteDate: {
+    color: '#9b9185',
+    fontSize: 12,
+  },
+  noteTitle: {
+    color: '#171412',
+    fontSize: 16,
+    fontWeight: '900',
+    lineHeight: 21,
+  },
+  copyableTextWrap: {
+    alignSelf: 'stretch',
+  },
+  copyFeedbackText: {
+    alignSelf: 'flex-start',
+    marginTop: 4,
+    color: '#6e4f22',
+    backgroundColor: '#f2e7d7',
+    borderRadius: 999,
+    overflow: 'hidden',
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    fontSize: 12,
+    fontWeight: '800',
+  },
+  noteBody: {
+    color: '#33291d',
+    fontSize: 15,
+    lineHeight: 21,
+  },
+  noteSummary: {
+    color: '#5f554a',
+    fontSize: 14,
+    lineHeight: 20,
+  },
+  compactMetaRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    alignItems: 'center',
+    gap: 6,
+  },
+  compactPill: {
+    color: '#7c5c2e',
+    backgroundColor: '#efe4d4',
+    borderRadius: 999,
+    paddingHorizontal: 7,
+    paddingVertical: 3,
+    fontSize: 11,
+    fontWeight: '800',
+  },
+  compactTag: {
+    color: '#8f8578',
+    fontSize: 12,
+    fontWeight: '700',
+  },
+  iconMeta: {
+    color: '#8f8578',
+    fontSize: 13,
+    fontWeight: '800',
+  },
+
+  rediscoveryPill: {
+    alignSelf: 'flex-start',
+    backgroundColor: '#edf4ef',
+    borderColor: '#d4e6d9',
+    borderWidth: 1,
+    borderRadius: 999,
+    paddingHorizontal: 9,
+    paddingVertical: 5,
+  },
+  rediscoveryPillText: {
+    color: '#d94c3d',
+    fontSize: 12,
+    fontWeight: '900',
+  },
+  rediscoveryBanner: {
+    backgroundColor: '#edf4ef',
+    borderColor: '#d4e6d9',
+    borderWidth: 1,
+    borderRadius: 20,
+    padding: 14,
+    gap: 5,
+  },
+  rediscoveryBannerKicker: {
+    color: '#d94c3d',
+    fontSize: 12,
+    fontWeight: '900',
+  },
+  rediscoveryBannerTitle: {
+    color: '#171412',
+    fontSize: 16,
+    fontWeight: '900',
+  },
+  rediscoveryBannerBody: {
+    color: '#5f554a',
+    fontSize: 13,
+    lineHeight: 18,
+  },
+  voiceStatusBox: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 8,
+    backgroundColor: '#fffefd',
+    borderColor: '#eee7df',
+    borderWidth: 1,
+    borderRadius: 14,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+  },
+  voiceDetailStatus: {
+    gap: 8,
+    backgroundColor: '#fffefd',
+    borderColor: '#eee7df',
+    borderWidth: 1,
+    borderRadius: 16,
+    padding: 12,
+  },
+  noteAudioBlock: {
+    backgroundColor: '#ef6a5a',
+    borderRadius: 22,
+    padding: 16,
+    gap: 13,
+  },
+  noteAudioTopRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'flex-start',
+    gap: 10,
+  },
+  noteAudioTextWrap: {
+    flex: 1,
+    gap: 3,
+  },
+  noteAudioKicker: {
+    color: '#e7b76a',
+    fontSize: 12,
+    fontWeight: '900',
+  },
+  noteAudioTitle: {
+    color: '#171412',
+    fontSize: 15,
+    fontWeight: '900',
+    lineHeight: 21,
+  },
+  noteAudioBadge: {
+    color: '#171412',
+    backgroundColor: '#e7b76a',
+    borderRadius: 999,
+    paddingHorizontal: 9,
+    paddingVertical: 5,
+    fontSize: 11,
+    fontWeight: '900',
+    overflow: 'hidden',
+  },
+  noteWaveformRow: {
+    height: 38,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 5,
+  },
+  noteWaveformBar: {
+    flex: 1,
+    borderRadius: 999,
+    backgroundColor: '#f28b7d',
+    opacity: 0.9,
+  },
+  noteWaveformBarActive: {
+    backgroundColor: '#e7b76a',
+    opacity: 1,
+  },
+  noteAudioTime: {
+    color: '#fff0d5',
+    fontSize: 12,
+    fontWeight: '800',
+  },
+  noteAudioControlRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+  },
+  audioControlButton: {
+    backgroundColor: '#e7b76a',
+    borderRadius: 999,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+  },
+  audioControlButtonText: {
+    color: '#171412',
+    fontSize: 12,
+    fontWeight: '900',
+  },
+  audioControlButtonSecondary: {
+    borderColor: '#e7b76a',
+    borderWidth: 1,
+    borderRadius: 999,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+  },
+  audioControlButtonSecondaryText: {
+    color: '#fff0d5',
+    fontSize: 12,
+    fontWeight: '900',
+  },
+  voiceStatusText: {
+    flex: 1,
+    color: '#7c5c2e',
+    fontSize: 12,
+    fontWeight: '900',
+  },
+  voiceErrorText: {
+    color: '#9b5047',
+    fontSize: 12,
+    lineHeight: 17,
+  },
+  retryButton: {
+    alignSelf: 'flex-start',
+    backgroundColor: '#ef6a5a',
+    borderRadius: 999,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+  },
+  retryButtonText: {
+    color: '#fff',
+    fontSize: 12,
+    fontWeight: '900',
+  },
+  noteHint: {
+    color: '#b08a50',
+    fontSize: 12,
+    fontWeight: '800',
+  },
+  routingBadge: {
+    alignSelf: 'flex-start',
+    backgroundColor: '#f2e7d7',
+    borderRadius: 999,
+    paddingHorizontal: 9,
+    paddingVertical: 5,
+  },
+  routingBadgeCompact: {
+    marginTop: 2,
+  },
+  routingBadgeText: {
+    color: '#7c5c2e',
+    fontSize: 12,
+    fontWeight: '900',
+  },
+  navigationStack: {
+    flex: 1,
+    position: 'relative',
+    overflow: 'hidden',
+    backgroundColor: '#fbfaf7',
+  },
+  previousScreenLayer: {
+    ...StyleSheet.absoluteFillObject,
+    zIndex: 0,
+    elevation: 0,
+    backgroundColor: '#fbfaf7',
+  },
+  previousScreenContent: {
+    flex: 1,
+  },
+  detailShell: {
+    flex: 1,
+    zIndex: 2,
+    elevation: 2,
+    backgroundColor: '#fbfaf7',
+  },
+  edgeSwipeZone: {
+    position: 'absolute',
+    left: 0,
+    top: 0,
+    bottom: 0,
+    width: 42,
+    zIndex: 100,
+    elevation: 100,
+    backgroundColor: 'transparent',
+  },
+  detailFixedTopBar: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    backgroundColor: '#fbfaf7',
+    paddingBottom: 8,
+    zIndex: 10,
+    elevation: 5,
+  },
+  detailContent: {
+    gap: 12,
+    paddingTop: 2,
+    paddingBottom: 220,
+  },
+  backButton: {
+    alignSelf: 'flex-start',
+    borderRadius: 999,
+    paddingHorizontal: 13,
+    paddingVertical: 9,
+    minWidth: 104,
+    minHeight: 50,
+    justifyContent: 'center',
+    backgroundColor: '#fff7eb',
+    borderColor: '#eadbc8',
+    borderWidth: 1,
+  },
+  backButtonInner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  backChevron: {
+    color: '#171412',
+    fontSize: 28,
+    lineHeight: 28,
+    fontWeight: '700',
+  },
+  backButtonText: {
+    color: '#171412',
+    fontSize: 16,
+    fontWeight: '800',
+  },
+  detailTopBar: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  detailActionRow: {
+    flexDirection: 'row',
+    gap: 8,
+    alignItems: 'center',
+  },
+  iconActionButton: {
+    minWidth: 38,
+    minHeight: 38,
+    borderRadius: 999,
+    backgroundColor: '#f2e7d7',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 10,
+  },
+  iconActionText: {
+    color: '#171412',
+    fontSize: 18,
+    fontWeight: '900',
+  },
+  detailHero: {
+    backgroundColor: '#fbfaf7',
+    borderBottomColor: '#e8e1d8',
+    borderBottomWidth: 1,
+    paddingTop: 8,
+    paddingBottom: 16,
+    gap: 11,
+  },
+  detailTypeBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    backgroundColor: '#fff',
+    borderColor: '#e8e1d8',
+    borderWidth: 1,
+    borderRadius: 18,
+    padding: 12,
+  },
+  mergedTypeBanner: {
+    backgroundColor: '#fff7ea',
+    borderColor: '#f0d7cf',
+  },
+  detailTypeIcon: {
+    fontSize: 22,
+  },
+  detailTypeTextWrap: {
+    flex: 1,
+    gap: 2,
+  },
+  detailTypeLabel: {
+    color: '#171412',
+    fontSize: 15,
+    fontWeight: '900',
+  },
+  detailTypeHint: {
+    color: '#7a746b',
+    fontSize: 12,
+    lineHeight: 17,
+  },
+  noteRewriteButton: {
+    alignSelf: 'flex-start',
+    backgroundColor: '#eef2ff',
+    borderColor: '#d9e1ff',
+    borderWidth: 1,
+    borderRadius: 999,
+    paddingHorizontal: 13,
+    paddingVertical: 9,
+  },
+  noteHeroActionRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+  },
+  noteRewriteButtonText: {
+    color: '#344080',
+    fontSize: 13,
+    fontWeight: '900',
+  },
+  noteExportButton: {
+    alignSelf: 'flex-start',
+    backgroundColor: '#fffefd',
+    borderColor: '#e6d5ba',
+    borderWidth: 1,
+    borderRadius: 999,
+    paddingHorizontal: 13,
+    paddingVertical: 9,
+  },
+  noteExportButtonText: {
+    color: '#6e4f22',
+    fontSize: 13,
+    fontWeight: '900',
+  },
+  detailTitle: {
+    color: '#171412',
+    fontSize: 24,
+    fontWeight: '900',
+    lineHeight: 30,
+  },
+  detailSummary: {
+    color: '#5f554a',
+    fontSize: 16,
+    lineHeight: 23,
+  },
+  detailBody: {
+    color: '#3b342e',
+    fontSize: 15,
+    lineHeight: 23,
+  },
+  flowDetailStatus: {
+    color: '#7c5c2e',
+    fontSize: 12,
+    fontWeight: '900',
+    backgroundColor: '#efe4d4',
+    borderRadius: 999,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+  },
+  flowDetailHero: {
+    backgroundColor: '#fbfaf7',
+    borderBottomColor: '#e8e1d8',
+    borderBottomWidth: 1,
+    paddingTop: 8,
+    paddingBottom: 18,
+    gap: 10,
+  },
+  flowInsightCard: {
+    backgroundColor: '#fff7ea',
+    borderColor: '#f0d7cf',
+    borderWidth: 1,
+    borderRadius: 22,
+    padding: 17,
+    gap: 10,
+  },
+  flowSynthesisText: {
+    color: '#171412',
+    fontSize: 17,
+    fontWeight: '800',
+    lineHeight: 26,
+  },
+  mergedDraftCard: {
+    backgroundColor: '#fffefd',
+    borderColor: '#f0d7cf',
+    borderWidth: 1,
+    borderRadius: 24,
+    padding: 18,
+    gap: 14,
+  },
+  flowMergedHero: {
+    backgroundColor: '#fffefd',
+    borderColor: '#f0d7cf',
+    borderWidth: 1,
+    borderRadius: 26,
+    padding: 20,
+    gap: 15,
+  },
+  flowMergedKicker: {
+    color: '#9a6b2f',
+    fontSize: 12,
+    fontWeight: '900',
+    letterSpacing: 0.4,
+  },
+  mergedDraftLabel: {
+    color: '#9a6b2f',
+    fontSize: 12,
+    fontWeight: '900',
+    letterSpacing: 0.4,
+  },
+  mergedDraftTitle: {
+    color: '#171412',
+    fontSize: 20,
+    fontWeight: '900',
+    lineHeight: 27,
+  },
+  mergedDraftBody: {
+    color: '#2f2924',
+    fontSize: 16,
+    lineHeight: 26,
+  },
+  judgmentBox: {
+    backgroundColor: '#fbfaf7',
+    borderRadius: 18,
+    padding: 14,
+    gap: 8,
+  },
+  draftLoadingBox: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    backgroundColor: '#fbfaf7',
+    borderRadius: 16,
+    padding: 12,
+  },
+  analysisToggleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 12,
+  },
+  collapsedSourcePill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    backgroundColor: '#fbfaf7',
+    borderColor: '#eee7df',
+    borderWidth: 1,
+    borderRadius: 18,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    gap: 12,
+  },
+  analysisBox: {
+    gap: 8,
+    paddingTop: 2,
+  },
+  compactActionRow: {
+    flexDirection: 'row',
+    gap: 10,
+  },
+  savedDraftHint: {
+    color: '#5f7549',
+    fontSize: 12,
+    fontWeight: '700',
+    marginTop: -4,
+  },
+  exportButton: {
+    backgroundColor: '#fffefd',
+    borderColor: '#e6d5ba',
+    borderWidth: 1,
+    borderRadius: 14,
+    paddingVertical: 13,
+    alignItems: 'center',
+  },
+  exportButtonText: {
+    color: '#6e4f22',
+    fontWeight: '900',
+  },
+  flowSectionHint: {
+    color: '#8f8578',
+    fontSize: 13,
+    lineHeight: 19,
+  },
+  flowSourceNoteCard: {
+    flexDirection: 'row',
+    gap: 10,
+    backgroundColor: '#fffefd',
+    borderColor: '#eee7df',
+    borderWidth: 1,
+    borderRadius: 16,
+    padding: 12,
+  },
+  flowSourceNoteIndex: {
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+    backgroundColor: '#ef6a5a',
+    color: '#171412',
+    fontSize: 12,
+    fontWeight: '900',
+    lineHeight: 24,
+    textAlign: 'center',
+  },
+  flowSourceNoteBody: {
+    flex: 1,
+    gap: 4,
+  },
+  flowBottomActionWrap: {
+    gap: 10,
+    paddingTop: 4,
+  },
+  threadSection: {
+    gap: 8,
+    paddingTop: 4,
+    paddingBottom: 4,
+  },
+  threadHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    minHeight: 38,
+  },
+  threadHeaderIcon: {
+    color: '#8f8578',
+    fontSize: 17,
+    fontWeight: '900',
+  },
+  threadLogRow: {
+    flexDirection: 'row',
+    gap: 10,
+  },
+  threadRail: {
+    width: 18,
+    alignItems: 'center',
+  },
+  threadDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    backgroundColor: '#c9bca9',
+    marginTop: 6,
+  },
+  threadLine: {
+    flex: 1,
+    width: 2,
+    backgroundColor: '#ded4c6',
+    marginTop: 5,
+  },
+  threadLogBody: {
+    flex: 1,
+    paddingBottom: 12,
+  },
+  threadLogMetaRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 5,
+  },
+  threadMoreButton: {
+    alignSelf: 'flex-start',
+    marginLeft: 28,
+    borderRadius: 999,
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    backgroundColor: '#efe4d4',
+  },
+  threadMoreText: {
+    color: '#7c5c2e',
+    fontSize: 12,
+    fontWeight: '900',
+  },
+  threadEditRow: {
+    alignItems: 'flex-end',
+    marginTop: -2,
+  },
+  detailSection: {
+    backgroundColor: '#fff',
+    borderColor: '#eee7df',
+    borderWidth: 1,
+    borderRadius: 20,
+    padding: 16,
+    gap: 10,
+  },
+  detailSectionHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    gap: 10,
+  },
+  editToggleButton: {
+    backgroundColor: '#eef2ff',
+    borderRadius: 999,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+  },
+  editToggleText: {
+    color: '#4f63c6',
+    fontSize: 12,
+    fontWeight: '900',
+  },
+  editBox: {
+    gap: 10,
+  },
+  editInput: {
+    minHeight: 140,
+    maxHeight: 230,
+    backgroundColor: '#fffefd',
+    borderColor: '#eee7df',
+    borderWidth: 1,
+    borderRadius: 16,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    color: '#33291d',
+    fontSize: 15,
+    lineHeight: 22,
+    textAlignVertical: 'top',
+  },
+  detailSectionTitle: {
+    color: '#171412',
+    fontSize: 16,
+    fontWeight: '900',
+  },
+  originalText: {
+    color: '#33291d',
+    fontSize: 16,
+    lineHeight: 24,
+  },
+  questionItem: {
+    color: '#5f554a',
+    fontSize: 14,
+    lineHeight: 21,
+  },
+  relatedItem: {
+    backgroundColor: '#fffefd',
+    borderRadius: 14,
+    padding: 12,
+    gap: 4,
+  },
+  relatedMetaRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    gap: 8,
+  },
+  relatedMeta: {
+    color: '#8f8578',
+    fontSize: 11,
+    fontWeight: '800',
+  },
+  relatedTitle: {
+    color: '#171412',
+    fontSize: 14,
+    fontWeight: '900',
+  },
+  relatedBody: {
+    color: '#7a746b',
+    fontSize: 13,
+    lineHeight: 18,
+  },
+  debugSection: {
+    backgroundColor: '#ef6a5a',
+    borderRadius: 18,
+    padding: 14,
+    gap: 10,
+  },
+  debugTitle: {
+    color: '#171412',
+    fontSize: 15,
+    fontWeight: '900',
+  },
+  debugSubTitle: {
+    color: '#9a8f82',
+    fontSize: 13,
+    fontWeight: '900',
+    marginTop: 4,
+  },
+  debugRow: {
+    gap: 3,
+  },
+  debugLabel: {
+    color: '#b9a890',
+    fontSize: 11,
+    fontWeight: '900',
+  },
+  debugValue: {
+    color: '#171412',
+    fontSize: 12,
+    lineHeight: 17,
+  },
+  debugCandidateBox: {
+    backgroundColor: '#2a2520',
+    borderRadius: 12,
+    padding: 10,
+    gap: 5,
+  },
+  debugCandidateTitle: {
+    color: '#171412',
+    fontSize: 12,
+    fontWeight: '900',
+  },
+  debugCandidateReason: {
+    color: '#9a8f82',
+    fontSize: 11,
+    lineHeight: 16,
+  },
+  logItem: {
+    backgroundColor: '#fffefd',
+    borderColor: '#eee7df',
+    borderWidth: 1,
+    borderRadius: 16,
+    padding: 12,
+    gap: 6,
+  },
+  logMeta: {
+    color: '#b08a50',
+    fontSize: 12,
+    fontWeight: '900',
+  },
+  logBody: {
+    color: '#33291d',
+    fontSize: 14,
+    lineHeight: 21,
+  },
+  logReason: {
+    color: '#7a746b',
+    fontSize: 12,
+    lineHeight: 17,
+  },
+  detachButton: {
+    alignSelf: 'flex-start',
+    backgroundColor: '#fff0ed',
+    borderRadius: 999,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    marginTop: 2,
+  },
+  detachButtonText: {
+    color: '#b34332',
+    fontSize: 12,
+    fontWeight: '900',
+  },
+  emptyInline: {
+    color: '#8f8578',
+    fontSize: 13,
+  },
+  tagRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 6,
+    marginTop: 2,
+  },
+  tagChip: {
+    color: '#d94c3d',
+    backgroundColor: '#eaf4ee',
+    borderRadius: 999,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    fontSize: 12,
+    fontWeight: '700',
+  },
+  audioPill: {
+    color: '#7c5c2e',
+    backgroundColor: '#f2e7d7',
+    borderRadius: 999,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    fontSize: 12,
+    fontWeight: '700',
+  },
+  floatingCaptureWrap: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    bottom: 72,
+    alignItems: 'center',
+    zIndex: 30,
+    elevation: 30,
+  },
+  floatingMicButton: {
+    width: 76,
+    height: 76,
+    borderRadius: 38,
+    backgroundColor: '#ef6a5a',
+    alignItems: 'center',
+    justifyContent: 'center',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 10 },
+    shadowOpacity: 0.18,
+    shadowRadius: 18,
+    elevation: 8,
+  },
+  floatingMicButtonActive: {
+    backgroundColor: '#d94c3d',
+  },
+  floatingMicIcon: {
+    color: '#fff',
+    fontSize: 31,
+    fontWeight: '900',
+  },
+  captureHint: {
+    marginTop: 8,
+    color: '#5f554a',
+    backgroundColor: '#fff',
+    borderRadius: 999,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    fontSize: 12,
+    fontWeight: '900',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 5 },
+    shadowOpacity: 0.08,
+    shadowRadius: 10,
+    elevation: 3,
+  },
+  captureHintActive: {
+    color: '#d94c3d',
+  },
+  bottomTabs: {
+    flexDirection: 'row',
+    gap: 8,
+    backgroundColor: '#fffefd',
+    borderColor: '#eee7df',
+    borderWidth: 1,
+    borderRadius: 18,
+    padding: 8,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.1,
+    shadowRadius: 16,
+    elevation: 4,
+  },
+  tabButton: {
+    flex: 1,
+    alignItems: 'center',
+    borderRadius: 14,
+    paddingVertical: 9,
+  },
+  tabButtonActive: {
+    backgroundColor: '#fff0ec',
+  },
+  tabIcon: {
+    color: '#8f8578',
+    fontSize: 16,
+    fontWeight: '900',
+  },
+  tabLabel: {
+    color: '#8f8578',
+    fontSize: 12,
+    fontWeight: '900',
+    marginTop: 2,
+  },
+  tabTextActive: {
+    color: '#d94c3d',
+  },
+  scrollContent: {
+    width: '100%',
+    maxWidth: '100%',
+    gap: 14,
+    paddingBottom: 106,
+  },
+  pageIntro: {
+    gap: 3,
+  },
+
+  pageIntroRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'flex-start',
+    gap: 12,
+  },
+  trashButton: {
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: '#eee7df',
+    backgroundColor: '#fffefd',
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+  },
+  trashButtonText: {
+    color: '#8f5f4b',
+    fontSize: 12,
+    fontWeight: '800',
+  },
+  archivePreviewHint: {
+    color: '#9a8f82',
+    fontSize: 12,
+    textAlign: 'center',
+    marginBottom: 8,
+  },
+  trashNoteCard: {
+    backgroundColor: '#fffefd',
+    borderColor: '#eee7df',
+    borderWidth: 1,
+    borderRadius: 18,
+    padding: 14,
+    gap: 10,
+  },
+  dangerButton: {
+    backgroundColor: '#fff0ed',
+    borderColor: '#f0b7ad',
+    borderWidth: 1,
+    borderRadius: 14,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+  },
+  dangerButtonText: {
+    color: '#c0392b',
+    fontWeight: '900',
+  },
+  collectionCard: {
+    backgroundColor: '#fff',
+    borderColor: '#eee7df',
+    borderWidth: 1,
+    borderRadius: 20,
+    padding: 16,
+    gap: 7,
+  },
+  collectionTopRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  collectionTitle: {
+    color: '#171412',
+    fontSize: 17,
+    fontWeight: '900',
+  },
+  collectionCount: {
+    color: '#d94c3d',
+    fontSize: 13,
+    fontWeight: '900',
+  },
+  collectionDescription: {
+    color: '#7a746b',
+    fontSize: 13,
+  },
+  collectionPreview: {
+    color: '#8f8578',
+    fontSize: 13,
+    lineHeight: 19,
+  },
+  searchCard: {
+    backgroundColor: '#fffefd',
+    borderColor: '#eee7df',
+    borderWidth: 1,
+    borderRadius: 22,
+    padding: 16,
+    gap: 11,
+  },
+  searchInput: {
+    backgroundColor: '#fff',
+    borderColor: '#e7d7bf',
+    borderWidth: 1,
+    borderRadius: 18,
+    paddingHorizontal: 14,
+    paddingVertical: 13,
+    fontSize: 15,
+  },
+  suggestionWrap: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+  },
+  suggestionChip: {
+    backgroundColor: '#eef2ff',
+    borderRadius: 999,
+    paddingHorizontal: 10,
+    paddingVertical: 7,
+  },
+  suggestionText: {
+    color: '#4f63c6',
+    fontSize: 12,
+    fontWeight: '800',
+  },
+  retrievalScrollContent: {
+    width: '100%',
+    maxWidth: '100%',
+    gap: 14,
+    paddingBottom: 176,
+  },
+  retrievalHeroTopRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 12,
+  },
+  retrievalHeroTextWrap: {
+    flex: 1,
+    gap: 4,
+  },
+  seedButton: {
+    backgroundColor: '#ef6a5a',
+    borderRadius: 999,
+    paddingHorizontal: 12,
+    paddingVertical: 9,
+  },
+  seedButtonText: {
+    color: '#fff',
+    fontSize: 12,
+    fontWeight: '900',
+  },
+  todayInlineStatus: {
+    color: '#8f8578',
+    fontSize: 13,
+    fontWeight: '800',
+    textAlign: 'center',
+    marginTop: -2,
+    marginBottom: 6,
+  },
+  retrievalSection: {
+    gap: 9,
+  },
+  retrievalSectionHeader: {
+    paddingHorizontal: 2,
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'flex-start',
+    gap: 12,
+  },
+  archiveDateGroup: {
+    gap: 10,
+  },
+  archiveDateHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 2,
+  },
+  archiveDateTitle: {
+    color: '#171412',
+    fontSize: 16,
+    fontWeight: '900',
+  },
+  archiveDateCount: {
+    color: '#8f8578',
+    fontSize: 12,
+    fontWeight: '800',
+  },
+  thoughtFlowCard: {
+    backgroundColor: '#fffefd',
+    borderColor: '#eee7df',
+    borderWidth: 1,
+    borderRadius: 16,
+    padding: 16,
+    gap: 10,
+  },
+  flowCardTopRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  flowNumberPill: {
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+    backgroundColor: '#fff0ec',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  flowNumberText: {
+    color: '#d94c3d',
+    fontSize: 12,
+    fontWeight: '900',
+  },
+  flowBadgeRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 7,
+  },
+  flowBadge: {
+    color: '#d94c3d',
+    backgroundColor: '#fff0ec',
+    borderRadius: 999,
+    paddingHorizontal: 9,
+    paddingVertical: 5,
+    fontSize: 11,
+    fontWeight: '900',
+    overflow: 'hidden',
+  },
+  flowBadgeStrong: {
+    color: '#171412',
+    backgroundColor: '#b7e0c7',
+    borderRadius: 999,
+    paddingHorizontal: 9,
+    paddingVertical: 5,
+    fontSize: 11,
+    fontWeight: '900',
+    overflow: 'hidden',
+  },
+  thoughtFlowKicker: {
+    color: '#d94c3d',
+    fontSize: 12,
+    fontWeight: '900',
+  },
+  thoughtFlowTitle: {
+    color: '#171412',
+    fontSize: 18,
+    fontWeight: '900',
+    lineHeight: 24,
+  },
+  thoughtFlowOneLine: {
+    color: '#8f8578',
+    fontSize: 13,
+    lineHeight: 18,
+  },
+  flowDraftBox: {
+    backgroundColor: '#fffefd',
+    borderColor: '#eee7df',
+    borderWidth: 1,
+    borderRadius: 16,
+    padding: 12,
+    gap: 4,
+  },
+  flowDraftLabel: {
+    color: '#7c5c2e',
+    fontSize: 11,
+    fontWeight: '900',
+  },
+  flowDraftText: {
+    color: '#2e241c',
+    fontSize: 14,
+    fontWeight: '900',
+    lineHeight: 20,
+  },
+  flowQuestionBox: {
+    backgroundColor: '#edf4ef',
+    borderRadius: 14,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+  },
+  flowQuestionText: {
+    color: '#d94c3d',
+    fontSize: 12,
+    fontWeight: '900',
+    lineHeight: 18,
+  },
+  thoughtFlowLabel: {
+    color: '#9a8f82',
+    fontSize: 11,
+    fontWeight: '900',
+    marginTop: 4,
+  },
+  thoughtFlowBody: {
+    color: '#171412',
+    fontSize: 13,
+    lineHeight: 19,
+  },
+  thoughtFlowQuestion: {
+    color: '#d94c3d',
+    fontSize: 13,
+    fontWeight: '800',
+    lineHeight: 19,
+  },
+  flowTimeline: {
+    gap: 0,
+    marginTop: 2,
+  },
+  flowTimelineItem: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 9,
+    minHeight: 28,
+  },
+  flowTimelineRail: {
+    width: 12,
+    alignItems: 'center',
+  },
+  flowTimelineDot: {
+    width: 7,
+    height: 7,
+    borderRadius: 999,
+    backgroundColor: '#fffefd',
+    marginTop: 5,
+  },
+  flowTimelineLine: {
+    width: 1,
+    flex: 1,
+    backgroundColor: '#fff0ec',
+    marginTop: 3,
+  },
+  flowTimelineText: {
+    flex: 1,
+    color: '#3b3028',
+    fontSize: 13,
+    lineHeight: 20,
+    fontWeight: '800',
+  },
+  flowCardArrow: {
+    position: 'absolute',
+    right: 16,
+    bottom: 14,
+    color: '#d94c3d',
+    fontSize: 24,
+    fontWeight: '900',
+  },
+  flowExpandedBox: {
+    borderTopColor: '#4a4035',
+    borderTopWidth: 1,
+    paddingTop: 10,
+    gap: 6,
+  },
+  flowOpenButton: {
+    alignSelf: 'flex-start',
+    backgroundColor: '#eaf4ee',
+    borderColor: '#c8dfd0',
+    borderWidth: 1,
+    borderRadius: 999,
+    paddingHorizontal: 13,
+    paddingVertical: 8,
+  },
+  flowOpenButtonText: {
+    color: '#d94c3d',
+    fontSize: 13,
+    fontWeight: '900',
+  },
+  flowNoteWrap: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 7,
+    marginTop: 3,
+  },
+  flowNoteChip: {
+    backgroundColor: '#2a2520',
+    borderColor: '#4a4035',
+    borderWidth: 1,
+    borderRadius: 999,
+    paddingHorizontal: 9,
+    paddingVertical: 6,
+    maxWidth: '100%',
+  },
+  flowNoteChipText: {
+    color: '#171412',
+    fontSize: 11,
+    fontWeight: '800',
+  },
+  retrievalCard: {
+    backgroundColor: '#fffefd',
+    borderColor: '#eee7df',
+    borderWidth: 1,
+    borderRadius: 20,
+    overflow: 'hidden',
+  },
+  retrievalCardPressArea: {
+    padding: 14,
+    gap: 8,
+  },
+  retrievalBadgeRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    flex: 1,
+    gap: 6,
+  },
+  connectionBadge: {
+    color: '#d94c3d',
+    backgroundColor: '#edf4ef',
+    borderRadius: 999,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    fontSize: 11,
+    fontWeight: '900',
+    overflow: 'hidden',
+  },
+  retrievalOneLine: {
+    color: '#5f554a',
+    fontSize: 14,
+    lineHeight: 20,
+    fontWeight: '700',
+  },
+  strengthRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  strengthText: {
+    color: '#d94c3d',
+    fontSize: 12,
+    fontWeight: '900',
+  },
+  strengthDots: {
+    color: '#d94c3d',
+    fontSize: 12,
+    letterSpacing: 1,
+    fontWeight: '900',
+  },
+  retrievalReasonPill: {
+    color: '#d94c3d',
+    backgroundColor: '#edf4ef',
+    borderRadius: 999,
+    paddingHorizontal: 9,
+    paddingVertical: 4,
+    fontSize: 12,
+    fontWeight: '900',
+    overflow: 'hidden',
+  },
+  retrievalReasonBox: {
+    backgroundColor: '#fbfaf7',
+    borderColor: '#e8e1d8',
+    borderWidth: 1,
+    borderRadius: 14,
+    padding: 11,
+    gap: 4,
+  },
+  retrievalReasonLabel: {
+    color: '#7c5c2e',
+    fontSize: 11,
+    fontWeight: '900',
+    marginTop: 2,
+  },
+  retrievalReasonBody: {
+    color: '#4f463d',
+    fontSize: 12,
+    lineHeight: 17,
+  },
+  connectionReason: {
+    color: '#7c5c2e',
+    backgroundColor: '#f5ead8',
+    borderRadius: 12,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    fontSize: 12,
+    fontWeight: '800',
+    lineHeight: 17,
+  },
+  expandReasonButton: {
+    alignSelf: 'flex-start',
+    backgroundColor: '#2a2520',
+    borderRadius: 999,
+    paddingHorizontal: 10,
+    paddingVertical: 7,
+  },
+  expandReasonText: {
+    color: '#d94c3d',
+    fontSize: 12,
+    fontWeight: '900',
+  },
+  expandReasonButtonLight: {
+    alignSelf: 'flex-start',
+    marginHorizontal: 14,
+    marginBottom: 10,
+    backgroundColor: '#efe4d4',
+    borderRadius: 999,
+    paddingHorizontal: 10,
+    paddingVertical: 7,
+  },
+  expandReasonTextLight: {
+    color: '#7c5c2e',
+    fontSize: 12,
+    fontWeight: '900',
+  },
+  feedbackState: {
+    color: '#4f63c6',
+    fontSize: 12,
+    fontWeight: '900',
+  },
+  feedbackButtonRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 7,
+    borderTopColor: '#eadbc3',
+    borderTopWidth: 1,
+    padding: 10,
+    backgroundColor: '#fff7ec',
+  },
+  feedbackButton: {
+    backgroundColor: '#edf4ef',
+    borderRadius: 999,
+    paddingHorizontal: 9,
+    paddingVertical: 7,
+  },
+  feedbackButtonText: {
+    color: '#d94c3d',
+    fontSize: 11,
+    fontWeight: '900',
+  },
+  feedbackButtonMuted: {
+    backgroundColor: '#efe4d4',
+    borderRadius: 999,
+    paddingHorizontal: 9,
+    paddingVertical: 7,
+  },
+  feedbackButtonMutedText: {
+    color: '#7a746b',
+    fontSize: 11,
+    fontWeight: '900',
+  },
+  retrievalEmptyInline: {
+    color: '#8f8578',
+    backgroundColor: '#fffefd',
+    borderColor: '#eee7df',
+    borderWidth: 1,
+    borderRadius: 16,
+    padding: 14,
+    textAlign: 'center',
+    fontSize: 13,
+  },
+});
+
