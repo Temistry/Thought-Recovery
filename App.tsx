@@ -156,6 +156,7 @@ export default function App() {
   const [archiveSearchResults, setArchiveSearchResults] = useState<Note[]>([]);
   const [trashNotes, setTrashNotes] = useState<Note[]>([]);
   const [showTrash, setShowTrash] = useState(false);
+  const [showAccount, setShowAccount] = useState(false);
   const [retrievalFeedback, setRetrievalFeedback] = useState<RetrievalFeedbackMap>({});
   const [generatedDrafts, setGeneratedDrafts] = useState<Record<string, MergedThoughtDraft>>({});
   const [draftGenerationState, setDraftGenerationState] = useState<Record<string, { loading: boolean; error?: string }>>({});
@@ -166,6 +167,8 @@ export default function App() {
 
   const cloudMode = isSupabaseConfigured && supabase !== null;
   const canUseCloud = cloudMode && !!session?.user;
+  const userEmail = session?.user?.email ?? '';
+  const userInitial = userEmail.trim().charAt(0).toUpperCase() || '나';
 
   const statusLabel = useMemo(() => {
     if (!cloudMode) return '로컬 테스트 중';
@@ -410,6 +413,7 @@ export default function App() {
     setNotes(await listRecentLocalNotes(120));
     setActiveTab('today');
     setSelectedNoteId(null);
+    setShowAccount(false);
   }
 
   async function loadRetrievalFeedback() {
@@ -1012,6 +1016,20 @@ export default function App() {
 
     return (
       <ScrollView contentContainerStyle={styles.scrollContent}>
+        {session?.user ? (
+          <View style={styles.homeTopBar}>
+            <View />
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="내 정보 보기"
+              style={styles.accountEntryButton}
+              onPress={() => setShowAccount(true)}
+              hitSlop={10}
+            >
+              <Text style={styles.accountEntryText}>{userInitial}</Text>
+            </Pressable>
+          </View>
+        ) : null}
         <TodayRecorderCard
           recording={!!recording}
           saving={saving}
@@ -1213,6 +1231,19 @@ export default function App() {
         />
       );
     }
+    if (showAccount && session?.user) {
+      return (
+        <View style={styles.navigationStack}>
+          {renderPreviousScreenLayer()}
+          <AccountScreen
+            email={userEmail}
+            userId={session.user.id}
+            onBack={() => setShowAccount(false)}
+            onSignOut={signOut}
+          />
+        </View>
+      );
+    }
     if (selectedNote) {
       return (
         <View style={styles.navigationStack}>
@@ -1288,12 +1319,53 @@ export default function App() {
             onToggleRecording={recording ? stopRecording : startRecording}
           />
         ) : null}
-        {(cloudMode && !session) || selectedNote || selectedThoughtFlow || showTrash ? null : <BottomTabs activeTab={activeTab} onChange={changeTab} />}
+        {(cloudMode && !session) || selectedNote || selectedThoughtFlow || showTrash || showAccount ? null : <BottomTabs activeTab={activeTab} onChange={changeTab} />}
       </KeyboardAvoidingView>
     </SafeAreaView>
   );
 }
 
+
+function AccountScreen({
+  email,
+  userId,
+  onBack,
+  onSignOut,
+}: {
+  email: string;
+  userId: string;
+  onBack: () => void;
+  onSignOut: () => void;
+}) {
+  const shortUserId = userId.length > 12 ? `${userId.slice(0, 8)}…${userId.slice(-4)}` : userId;
+
+  return (
+    <ScrollView contentContainerStyle={styles.detailContent}>
+      <View style={styles.detailShell}>
+        <AppBackButton onPress={onBack} label="오늘로" />
+        <View style={styles.accountHeroCard}>
+          <View style={styles.accountAvatarLarge}>
+            <Text style={styles.accountAvatarText}>{email.trim().charAt(0).toUpperCase() || '나'}</Text>
+          </View>
+          <Text style={styles.accountEmail} numberOfLines={1}>{email || '로그인된 사용자'}</Text>
+        </View>
+        <View style={styles.accountInfoCard}>
+          <View style={styles.accountInfoRow}>
+            <Text style={styles.accountInfoLabel}>동기화</Text>
+            <Text style={styles.accountInfoValue}>켜짐</Text>
+          </View>
+          <View style={styles.accountInfoRow}>
+            <Text style={styles.accountInfoLabel}>사용자 ID</Text>
+            <Text style={styles.accountInfoValue}>{shortUserId}</Text>
+          </View>
+        </View>
+        <Pressable style={styles.signOutButton} onPress={onSignOut}>
+          <Text style={styles.signOutButtonText}>로그아웃</Text>
+        </Pressable>
+      </View>
+    </ScrollView>
+  );
+}
 
 function TrashScreen({
   notes,
@@ -1473,8 +1545,8 @@ function ThoughtFlowSection({
   flows,
   onOpenFlow,
   onOpenNote,
-  title = '자라난 생각 카드',
-  hint = '관련된 녹음이 하나의 생각 정리 리포트로 자라는 장면이에요.',
+  title = '',
+  hint = '',
   emptyText,
 }: {
   flows: ThoughtFlow[];
@@ -1488,12 +1560,14 @@ function ThoughtFlowSection({
     if (!emptyText) return null;
     return (
       <View style={styles.retrievalSection}>
-        <View style={styles.retrievalSectionHeader}>
-          <View>
-            <Text style={styles.sectionTitle}>{title}</Text>
-            <Text style={styles.sectionHint}>{hint}</Text>
+        {title || hint ? (
+          <View style={styles.retrievalSectionHeader}>
+            <View>
+              {title ? <Text style={styles.sectionTitle}>{title}</Text> : null}
+              {hint ? <Text style={styles.sectionHint}>{hint}</Text> : null}
+            </View>
           </View>
-        </View>
+        ) : null}
         <Text style={styles.retrievalEmptyInline}>{emptyText}</Text>
       </View>
     );
@@ -1511,48 +1585,16 @@ function ThoughtFlowSection({
 function ThoughtFlowCard({
   flow,
   onOpenFlow,
-  onOpenNote,
 }: {
   flow: ThoughtFlow;
   onOpenFlow: (flow: ThoughtFlow) => void;
   onOpenNote: (note: Note) => void;
 }) {
-  const updatedAtLabel = formatDate(flow.updatedAt);
+  const body = flow.mergedDraft?.body || flow.synthesis;
 
   return (
     <Pressable style={styles.thoughtFlowCard} onPress={() => onOpenFlow(flow)}>
-      <View style={styles.flowCardTopRow}>
-        <View style={styles.flowNumberPill}><Text style={styles.flowNumberText}>{flow.notes.length}</Text></View>
-        <Text style={styles.thoughtFlowOneLine}>오늘 업데이트</Text>
-      </View>
-      <Text style={styles.thoughtFlowTitle} numberOfLines={2}>{flow.title}</Text>
-      <Text style={styles.thoughtFlowOneLine}>관련 생각 {flow.notes.length}개 · {updatedAtLabel}</Text>
-      <View style={styles.flowDraftBox}>
-        <Text style={styles.flowDraftLabel}>AI가 합친 초안</Text>
-        <Text style={styles.flowDraftText} numberOfLines={2}>{flow.mergedDraft?.title || flow.synthesis}</Text>
-      </View>
-      <View style={styles.flowQuestionBox}>
-        <Text style={styles.flowQuestionText} numberOfLines={2}>다음 질문: {flow.nextQuestion}</Text>
-      </View>
-      <View style={styles.flowTimeline}>
-        {flow.notes.slice(0, 3).map((note, index) => (
-          <Pressable
-            key={note.id}
-            style={styles.flowTimelineItem}
-            onPress={(event) => {
-              event.stopPropagation?.();
-              onOpenNote(note);
-            }}
-          >
-            <View style={styles.flowTimelineRail}>
-              <View style={styles.flowTimelineDot} />
-              {index < Math.min(3, flow.notes.length) - 1 ? <View style={styles.flowTimelineLine} /> : null}
-            </View>
-            <Text style={styles.flowTimelineText} numberOfLines={1}>{note.ai_title || makeDraftTitle(note.raw_text)}</Text>
-          </Pressable>
-        ))}
-      </View>
-      <Text style={styles.flowCardArrow}>›</Text>
+      <Text style={styles.flowDraftText} numberOfLines={6}>{body}</Text>
     </Pressable>
   );
 }
@@ -3286,6 +3328,96 @@ const styles = StyleSheet.create({
     justifyContent: 'flex-end',
     flexShrink: 0,
     gap: 10,
+  },
+  homeTopBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    minHeight: 34,
+  },
+  accountEntryButton: {
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#fff7f2',
+    borderWidth: 1,
+    borderColor: '#f0ded2',
+    shadowColor: '#8c5f41',
+    shadowOpacity: 0.08,
+    shadowRadius: 10,
+    shadowOffset: { width: 0, height: 4 },
+  },
+  accountEntryText: {
+    color: '#bf4b4b',
+    fontSize: 14,
+    fontWeight: '900',
+  },
+  accountHeroCard: {
+    alignItems: 'center',
+    gap: 12,
+    borderRadius: 30,
+    backgroundColor: '#fffaf6',
+    borderWidth: 1,
+    borderColor: '#f0e5dc',
+    padding: 22,
+  },
+  accountAvatarLarge: {
+    width: 72,
+    height: 72,
+    borderRadius: 36,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#ff625f',
+  },
+  accountAvatarText: {
+    color: '#fffaf6',
+    fontSize: 26,
+    fontWeight: '900',
+  },
+  accountEmail: {
+    color: '#171412',
+    fontSize: 17,
+    fontWeight: '800',
+    maxWidth: '100%',
+  },
+  accountInfoCard: {
+    borderRadius: 24,
+    backgroundColor: '#ffffff',
+    borderWidth: 1,
+    borderColor: '#eee4da',
+    padding: 16,
+    gap: 12,
+  },
+  accountInfoRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 12,
+  },
+  accountInfoLabel: {
+    color: '#8f8578',
+    fontSize: 13,
+    fontWeight: '700',
+  },
+  accountInfoValue: {
+    color: '#2c2520',
+    fontSize: 14,
+    fontWeight: '800',
+    flexShrink: 1,
+  },
+  signOutButton: {
+    height: 48,
+    borderRadius: 18,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#f4eee8',
+  },
+  signOutButtonText: {
+    color: '#8a5148',
+    fontSize: 14,
+    fontWeight: '900',
   },
   todayRetrievalCard: {
     flexDirection: 'row',
