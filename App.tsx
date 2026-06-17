@@ -1338,32 +1338,83 @@ function AccountScreen({
   onSignOut: () => void;
 }) {
   const shortUserId = userId.length > 12 ? `${userId.slice(0, 8)}…${userId.slice(-4)}` : userId;
+  const displayName = email ? email.split('@')[0] : '나';
 
   return (
-    <ScrollView contentContainerStyle={styles.detailContent}>
-      <View style={styles.detailShell}>
-        <AppBackButton onPress={onBack} label="오늘로" />
-        <View style={styles.accountHeroCard}>
+    <View style={styles.accountSheetShell}>
+      <Pressable accessibilityRole="button" accessibilityLabel="닫기" style={styles.accountCloseButton} onPress={onBack} hitSlop={10}>
+        <Text style={styles.accountCloseText}>×</Text>
+      </Pressable>
+      <ScrollView contentContainerStyle={styles.accountSheetContent} showsVerticalScrollIndicator={false}>
+        <View style={styles.accountProfileBlock}>
           <View style={styles.accountAvatarLarge}>
             <Text style={styles.accountAvatarText}>{email.trim().charAt(0).toUpperCase() || '나'}</Text>
           </View>
-          <Text style={styles.accountEmail} numberOfLines={1}>{email || '로그인된 사용자'}</Text>
+          <Text style={styles.accountDisplayName} numberOfLines={1}>{displayName}</Text>
         </View>
-        <View style={styles.accountInfoCard}>
-          <View style={styles.accountInfoRow}>
-            <Text style={styles.accountInfoLabel}>동기화</Text>
-            <Text style={styles.accountInfoValue}>켜짐</Text>
-          </View>
-          <View style={styles.accountInfoRow}>
-            <Text style={styles.accountInfoLabel}>사용자 ID</Text>
-            <Text style={styles.accountInfoValue}>{shortUserId}</Text>
-          </View>
-        </View>
-        <Pressable style={styles.signOutButton} onPress={onSignOut}>
-          <Text style={styles.signOutButtonText}>로그아웃</Text>
+
+        <SettingsSection title="생각회수기 맞춤 설정">
+          <SettingsRow icon="◔" label="개인 맞춤 설정" />
+          <SettingsRow icon="▱" label="메모리" />
+          <SettingsRow icon="▦" label="앱" />
+        </SettingsSection>
+
+        <SettingsSection title="계정">
+          <SettingsRow icon="✉" label="이메일" value={email} hideChevron />
+          <SettingsRow icon="↔" label="동기화" value="켜짐" hideChevron />
+          <SettingsRow icon="#" label="사용자 ID" value={shortUserId} hideChevron />
+        </SettingsSection>
+
+        <SettingsSection title="앱 설정">
+          <SettingsRow icon="⚙" label="일반" />
+          <SettingsRow icon="◌" label="알림" />
+          <SettingsRow icon="▥" label="음성" />
+          <SettingsRow icon="▣" label="데이터 제어" />
+          <SettingsRow icon="▤" label="저장 공간" />
+        </SettingsSection>
+
+        <SettingsSection title="도움말">
+          <SettingsRow icon="⚑" label="앱 문제 신고하기" />
+          <SettingsRow icon="?" label="도움말 센터" />
+          <SettingsRow icon="ⓘ" label="정보" />
+        </SettingsSection>
+
+        <Pressable style={styles.accountLogoutRow} onPress={onSignOut}>
+          <Text style={styles.accountLogoutIcon}>↪</Text>
+          <Text style={styles.accountLogoutText}>로그아웃</Text>
         </Pressable>
-      </View>
-    </ScrollView>
+      </ScrollView>
+    </View>
+  );
+}
+
+function SettingsSection({ title, children }: { title: string; children: ReactNode }) {
+  return (
+    <View style={styles.settingsSectionBlock}>
+      <Text style={styles.settingsSectionTitle}>{title}</Text>
+      <View style={styles.settingsSectionCard}>{children}</View>
+    </View>
+  );
+}
+
+function SettingsRow({
+  icon,
+  label,
+  value,
+  hideChevron,
+}: {
+  icon: string;
+  label: string;
+  value?: string;
+  hideChevron?: boolean;
+}) {
+  return (
+    <Pressable style={styles.settingsRow} disabled={hideChevron}>
+      <Text style={styles.settingsIcon}>{icon}</Text>
+      <Text style={styles.settingsLabel} numberOfLines={1}>{label}</Text>
+      {value ? <Text style={styles.settingsValue} numberOfLines={1}>{value}</Text> : null}
+      {hideChevron ? null : <Text style={styles.settingsChevron}>›</Text>}
+    </Pressable>
   );
 }
 
@@ -3354,70 +3405,137 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: '900',
   },
-  accountHeroCard: {
+  accountSheetShell: {
+    flex: 1,
+    zIndex: 3,
+    elevation: 3,
+    marginHorizontal: -16,
+    marginTop: -10,
+    marginBottom: -12,
+    backgroundColor: '#f0eff5',
+    borderTopLeftRadius: 32,
+    borderTopRightRadius: 32,
+    overflow: 'hidden',
+  },
+  accountCloseButton: {
+    position: 'absolute',
+    top: 18,
+    right: 18,
+    zIndex: 5,
+    width: 48,
+    height: 48,
+    borderRadius: 24,
     alignItems: 'center',
-    gap: 12,
-    borderRadius: 30,
-    backgroundColor: '#fffaf6',
-    borderWidth: 1,
-    borderColor: '#f0e5dc',
-    padding: 22,
+    justifyContent: 'center',
+    backgroundColor: '#ffffff',
+    shadowColor: '#14110f',
+    shadowOpacity: 0.08,
+    shadowRadius: 12,
+    shadowOffset: { width: 0, height: 4 },
+  },
+  accountCloseText: {
+    color: '#171412',
+    fontSize: 34,
+    lineHeight: 38,
+    fontWeight: '400',
+  },
+  accountSheetContent: {
+    paddingTop: 86,
+    paddingHorizontal: 20,
+    paddingBottom: 34,
+    gap: 26,
+  },
+  accountProfileBlock: {
+    alignItems: 'center',
+    gap: 10,
   },
   accountAvatarLarge: {
-    width: 72,
-    height: 72,
-    borderRadius: 36,
+    width: 74,
+    height: 74,
+    borderRadius: 37,
     alignItems: 'center',
     justifyContent: 'center',
     backgroundColor: '#ff625f',
   },
   accountAvatarText: {
     color: '#fffaf6',
-    fontSize: 26,
+    fontSize: 28,
     fontWeight: '900',
   },
-  accountEmail: {
+  accountDisplayName: {
     color: '#171412',
+    fontSize: 21,
+    fontWeight: '800',
+    maxWidth: '82%',
+  },
+  settingsSectionBlock: {
+    gap: 10,
+  },
+  settingsSectionTitle: {
+    color: '#8e8a92',
     fontSize: 17,
     fontWeight: '800',
-    maxWidth: '100%',
+    paddingHorizontal: 22,
   },
-  accountInfoCard: {
+  settingsSectionCard: {
     borderRadius: 24,
     backgroundColor: '#ffffff',
-    borderWidth: 1,
-    borderColor: '#eee4da',
-    padding: 16,
-    gap: 12,
+    overflow: 'hidden',
   },
-  accountInfoRow: {
+  settingsRow: {
+    minHeight: 58,
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'space-between',
-    gap: 12,
+    paddingHorizontal: 22,
+    gap: 14,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: '#e4e1df',
   },
-  accountInfoLabel: {
-    color: '#8f8578',
-    fontSize: 13,
+  settingsIcon: {
+    width: 22,
+    color: '#171412',
+    fontSize: 22,
+    fontWeight: '800',
+    textAlign: 'center',
+  },
+  settingsLabel: {
+    flex: 1,
+    color: '#171412',
+    fontSize: 18,
     fontWeight: '700',
   },
-  accountInfoValue: {
-    color: '#2c2520',
-    fontSize: 14,
-    fontWeight: '800',
-    flexShrink: 1,
+  settingsValue: {
+    maxWidth: '45%',
+    color: '#7f7a80',
+    fontSize: 16,
+    fontWeight: '600',
   },
-  signOutButton: {
-    height: 48,
-    borderRadius: 18,
+  settingsChevron: {
+    color: '#c7c3c2',
+    fontSize: 30,
+    fontWeight: '300',
+    marginLeft: -4,
+  },
+  accountLogoutRow: {
+    minHeight: 58,
+    borderRadius: 24,
+    backgroundColor: '#ffffff',
+    flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: '#f4eee8',
+    paddingHorizontal: 22,
+    gap: 14,
   },
-  signOutButtonText: {
-    color: '#8a5148',
-    fontSize: 14,
-    fontWeight: '900',
+  accountLogoutIcon: {
+    width: 22,
+    color: '#c0443e',
+    fontSize: 22,
+    fontWeight: '800',
+    textAlign: 'center',
+  },
+  accountLogoutText: {
+    color: '#a5413c',
+    fontSize: 18,
+    fontWeight: '800',
   },
   todayRetrievalCard: {
     flexDirection: 'row',
