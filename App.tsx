@@ -28,9 +28,10 @@ import {
 } from 'react-native';
 import type { Session } from '@supabase/supabase-js';
 
-import { createLocalNote, deleteLocalTrashNote, listCachedThoughtFlows, listLocalNotes, listLocalTrashNotes, listRecentLocalNotes, moveLocalNoteToTrash, readLocalKeyValue, replaceCachedThoughtFlows, replaceLocalNotes, restoreLocalTrashNote, searchLocalNotes, updateLocalNote, writeLocalKeyValue } from './src/lib/localNotes';
+import { createLocalNote, deleteLocalTrashNote, listCachedThoughtFlows, listLocalNotes, listLocalTrashNotes, listRecentLocalNotes, moveLocalNoteToTrash, readCachedThoughtFingerprint, readLocalKeyValue, rebuildCachedThoughtFingerprint, replaceCachedThoughtFlows, replaceLocalNotes, restoreLocalTrashNote, searchLocalNotes, updateLocalNote, writeLocalKeyValue } from './src/lib/localNotes';
+import { buildPromptPatternContext } from './src/lib/thoughtFingerprint';
 import { isSupabaseConfigured, supabase } from './src/lib/supabase';
-import { Note, SourceType } from './src/types';
+import { Note, SourceType, ThoughtFingerprintSnapshot } from './src/types';
 
 const AUDIO_BUCKET = 'note-audio';
 const AnimatedPressable = Animated.createAnimatedComponent(Pressable);
@@ -159,6 +160,7 @@ export default function App() {
   const [showAccount, setShowAccount] = useState(false);
   const [retrievalFeedback, setRetrievalFeedback] = useState<RetrievalFeedbackMap>({});
   const [generatedDrafts, setGeneratedDrafts] = useState<Record<string, MergedThoughtDraft>>({});
+  const [thoughtFingerprint, setThoughtFingerprint] = useState<ThoughtFingerprintSnapshot | null>(null);
   const [draftGenerationState, setDraftGenerationState] = useState<Record<string, { loading: boolean; error?: string }>>({});
   const [noteRewriteInFlightId, setNoteRewriteInFlightId] = useState<string | null>(null);
   const migrationInFlightRef = useRef(false);
@@ -246,6 +248,34 @@ export default function App() {
   useEffect(() => {
     void loadNotes();
   }, [loadNotes, session?.user?.id]);
+
+  useEffect(() => {
+    let cancelled = false;
+    readCachedThoughtFingerprint()
+      .then((snapshot) => {
+        if (!cancelled && snapshot) setThoughtFingerprint(snapshot);
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    const timer = setTimeout(() => {
+      rebuildCachedThoughtFingerprint(feedNotes)
+        .then((snapshot) => {
+          if (!cancelled) setThoughtFingerprint(snapshot);
+        })
+        .catch(() => undefined);
+    }, 350);
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [feedNotes]);
+
   useEffect(() => {
     let cancelled = false;
     if (activeTab !== 'organized') return;
@@ -934,11 +964,14 @@ export default function App() {
         rawText: note.raw_text,
         createdAt: note.created_at,
       }));
+      const latestFingerprint = thoughtFingerprint ?? await rebuildCachedThoughtFingerprint(feedNotes);
+      const thoughtPatternContext = buildPromptPatternContext(latestFingerprint.patterns);
       const { data, error } = await supabase.functions.invoke('generate-merged-thought-draft', {
         body: {
           flowId: flow.id,
           title: flow.title,
           notes: sourceNotes,
+          thoughtPatternContext,
         },
       });
       if (error) {

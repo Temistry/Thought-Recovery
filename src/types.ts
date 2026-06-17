@@ -13,6 +13,55 @@ export type ParagraphIntent = {
   confidence: number;
 };
 
+export type ThoughtTerm = {
+  id: string;
+  term: string;
+  normalizedTerm: string;
+  count: number;
+  recentCount30d: number;
+  firstSeenAt: string;
+  lastSeenAt: string;
+  sourceNoteIds: string[];
+};
+
+export type ThoughtTermContext = {
+  id: string;
+  termId: string;
+  noteId: string;
+  sentence: string;
+  nearbyTerms: string[];
+  createdAt: string;
+};
+
+export type ThoughtMeaningGroup = {
+  id: string;
+  label: string;
+  terms: string[];
+  description: string;
+  sourceNoteIds: string[];
+  confidence: number;
+  updatedAt: string;
+};
+
+export type ThoughtPattern = {
+  id: string;
+  title: string;
+  summary: string;
+  evidenceTerms: string[];
+  sourceNoteIds: string[];
+  confidence: number;
+  lastUpdatedAt: string;
+};
+
+export type ThoughtFingerprintSnapshot = {
+  id: string;
+  generatedAt: string;
+  terms: ThoughtTerm[];
+  contexts: ThoughtTermContext[];
+  meaningGroups: ThoughtMeaningGroup[];
+  patterns: ThoughtPattern[];
+};
+
 export type MergedThoughtDraft = {
   id: string;
   flowId: string;

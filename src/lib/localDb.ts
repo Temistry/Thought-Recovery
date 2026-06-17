@@ -1,5 +1,5 @@
 import * as SQLite from 'expo-sqlite';
-import { MergedThoughtDraft, Note, ThoughtFlow } from '../types';
+import { MergedThoughtDraft, Note, ThoughtFingerprintSnapshot, ThoughtFlow } from '../types';
 
 const DB_NAME = 'idea-second-brain.db';
 const SCHEMA_VERSION = 1;
@@ -14,6 +14,12 @@ type ThoughtFlowRow = {
   id: string;
   payload: string;
   draft_payload: string | null;
+};
+
+type ThoughtFingerprintRow = {
+  id: string;
+  generated_at: string;
+  payload: string;
 };
 
 export type LocalDbListNotesOptions = {
@@ -69,11 +75,52 @@ export async function getLocalDb() {
           created_at text not null,
           payload text not null
         );
+        create table if not exists thought_terms (
+          id text primary key not null,
+          term text not null,
+          normalized_term text not null,
+          count integer not null,
+          recent_count_30d integer not null,
+          first_seen_at text not null,
+          last_seen_at text not null,
+          source_note_ids text not null,
+          payload text not null
+        );
+        create table if not exists thought_term_contexts (
+          id text primary key not null,
+          term_id text not null,
+          note_id text not null,
+          created_at text not null,
+          payload text not null
+        );
+        create table if not exists thought_meaning_groups (
+          id text primary key not null,
+          label text not null,
+          confidence real not null,
+          updated_at text not null,
+          source_note_ids text not null,
+          payload text not null
+        );
+        create table if not exists thought_patterns (
+          id text primary key not null,
+          title text not null,
+          confidence real not null,
+          last_updated_at text not null,
+          source_note_ids text not null,
+          payload text not null
+        );
+        create table if not exists thought_fingerprint_snapshots (
+          id text primary key not null,
+          generated_at text not null,
+          payload text not null
+        );
         create index if not exists notes_active_created_idx on notes(deleted_at, created_at desc);
         create index if not exists notes_parent_idx on notes(parent_note_id);
         create index if not exists notes_deleted_idx on notes(deleted_at desc);
         create index if not exists thought_flows_updated_idx on thought_flows(updated_at desc);
         create index if not exists thought_flow_notes_note_idx on thought_flow_notes(note_id);
+        create index if not exists thought_terms_recent_idx on thought_terms(recent_count_30d desc, count desc);
+        create index if not exists thought_patterns_confidence_idx on thought_patterns(confidence desc, last_updated_at desc);
       `);
       await ensureThoughtFlowSourceColumn(db);
       const row = await db.getFirstAsync<{ value: string }>('select value from app_meta where key = ?', ['schema_version']);
@@ -242,6 +289,63 @@ export async function listLocalDbThoughtDrafts(): Promise<Record<string, MergedT
     }
   }
   return drafts;
+}
+
+export async function replaceLocalDbThoughtFingerprint(snapshot: ThoughtFingerprintSnapshot): Promise<void> {
+  const db = await getLocalDb();
+  await db.withTransactionAsync(async () => {
+    await db.runAsync('delete from thought_terms');
+    await db.runAsync('delete from thought_term_contexts');
+    await db.runAsync('delete from thought_meaning_groups');
+    await db.runAsync('delete from thought_patterns');
+    for (const term of snapshot.terms) {
+      await db.runAsync(
+        `insert or replace into thought_terms(id, term, normalized_term, count, recent_count_30d, first_seen_at, last_seen_at, source_note_ids, payload)
+         values(?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [term.id, term.term, term.normalizedTerm, term.count, term.recentCount30d, term.firstSeenAt, term.lastSeenAt, JSON.stringify(term.sourceNoteIds), JSON.stringify(term)],
+      );
+    }
+    for (const context of snapshot.contexts) {
+      await db.runAsync(
+        `insert or replace into thought_term_contexts(id, term_id, note_id, created_at, payload)
+         values(?, ?, ?, ?, ?)`,
+        [context.id, context.termId, context.noteId, context.createdAt, JSON.stringify(context)],
+      );
+    }
+    for (const group of snapshot.meaningGroups) {
+      await db.runAsync(
+        `insert or replace into thought_meaning_groups(id, label, confidence, updated_at, source_note_ids, payload)
+         values(?, ?, ?, ?, ?, ?)`,
+        [group.id, group.label, group.confidence, group.updatedAt, JSON.stringify(group.sourceNoteIds), JSON.stringify(group)],
+      );
+    }
+    for (const pattern of snapshot.patterns) {
+      await db.runAsync(
+        `insert or replace into thought_patterns(id, title, confidence, last_updated_at, source_note_ids, payload)
+         values(?, ?, ?, ?, ?, ?)`,
+        [pattern.id, pattern.title, pattern.confidence, pattern.lastUpdatedAt, JSON.stringify(pattern.sourceNoteIds), JSON.stringify(pattern)],
+      );
+    }
+    await db.runAsync(
+      `insert or replace into thought_fingerprint_snapshots(id, generated_at, payload)
+       values(?, ?, ?)`,
+      [snapshot.id, snapshot.generatedAt, JSON.stringify(snapshot)],
+    );
+  });
+}
+
+export async function readLocalDbThoughtFingerprint(): Promise<ThoughtFingerprintSnapshot | null> {
+  const db = await getLocalDb();
+  const row = await db.getFirstAsync<ThoughtFingerprintRow>(
+    'select id, generated_at, payload from thought_fingerprint_snapshots where id = ? limit 1',
+    ['local-thought-fingerprint'],
+  );
+  if (!row?.payload) return null;
+  try {
+    return JSON.parse(row.payload) as ThoughtFingerprintSnapshot;
+  } catch {
+    return null;
+  }
 }
 
 async function ensureThoughtFlowSourceColumn(db: SQLite.SQLiteDatabase) {

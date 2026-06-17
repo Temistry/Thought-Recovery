@@ -14,6 +14,7 @@ type RequestBody = {
   flowId?: string;
   title?: string;
   notes?: SourceNote[];
+  thoughtPatternContext?: string;
 };
 
 type MergedThoughtDraft = {
@@ -56,11 +57,12 @@ Deno.serve(async (req) => {
     const flowId = cleanText(body.flowId);
     const flowTitle = cleanText(body.title) || '생각 정리 리포트';
     const notes = normalizeNotes(body.notes ?? []);
+    const thoughtPatternContext = cleanRawText(body.thoughtPatternContext).slice(0, 2000);
 
     if (!flowId) return json({ error: 'flowId is required' }, 400);
     if (notes.length < 2) return json({ error: 'At least 2 source notes are required' }, 400);
 
-    const result = await generateDraft(openAiKey, model, fallbackModel, flowId, flowTitle, notes);
+    const result = await generateDraft(openAiKey, model, fallbackModel, flowId, flowTitle, notes, thoughtPatternContext);
     return json({ ok: true, draft: result.draft, model: result.model, fallbackUsed: result.fallbackUsed });
   } catch (error) {
     return json({ error: error instanceof Error ? error.message : String(error) }, 500);
@@ -74,14 +76,15 @@ async function generateDraft(
   flowId: string,
   flowTitle: string,
   notes: Required<SourceNote>[],
+  thoughtPatternContext: string,
 ): Promise<{ draft: MergedThoughtDraft; model: string; fallbackUsed: boolean }> {
   const now = new Date().toISOString();
-  const primary = await requestMergedDraft(openAiKey, model, flowId, flowTitle, notes, now);
+  const primary = await requestMergedDraft(openAiKey, model, flowId, flowTitle, notes, now, thoughtPatternContext);
   if ((!isCorruptedKoreanDraft(primary.draft) && !isUngroundedDraft(primary.draft, notes)) || model === fallbackModel) {
     return { ...primary, fallbackUsed: false };
   }
 
-  const fallback = await requestMergedDraft(openAiKey, fallbackModel, flowId, flowTitle, notes, now);
+  const fallback = await requestMergedDraft(openAiKey, fallbackModel, flowId, flowTitle, notes, now, thoughtPatternContext);
   if (isCorruptedKoreanDraft(fallback.draft) || isUngroundedDraft(fallback.draft, notes)) {
     return { draft: buildExtractiveMergedDraft(flowId, flowTitle, notes, now), model: 'source-grounded-fallback', fallbackUsed: true };
   }
@@ -95,9 +98,10 @@ async function requestMergedDraft(
   flowTitle: string,
   notes: Required<SourceNote>[],
   now: string,
+  thoughtPatternContext: string,
 ): Promise<{ draft: MergedThoughtDraft; model: string }> {
   if (!model.startsWith('gpt-5')) {
-    return requestMergedDraftWithChatCompletions(openAiKey, model, flowId, flowTitle, notes, now);
+    return requestMergedDraftWithChatCompletions(openAiKey, model, flowId, flowTitle, notes, now, thoughtPatternContext);
   }
 
   const requestBody: Record<string, unknown> = {
@@ -126,7 +130,7 @@ async function requestMergedDraft(
         },
       },
     },
-    input: buildPrompt(flowTitle, notes),
+    input: buildPrompt(flowTitle, notes, thoughtPatternContext),
   };
   if (model.startsWith('gpt-5')) {
     requestBody.reasoning = { effort: 'high' };
@@ -167,6 +171,7 @@ async function requestMergedDraftWithChatCompletions(
   flowTitle: string,
   notes: Required<SourceNote>[],
   now: string,
+  thoughtPatternContext: string,
 ): Promise<{ draft: MergedThoughtDraft; model: string }> {
   const response = await fetch('https://api.openai.com/v1/chat/completions', {
     method: 'POST',
@@ -186,7 +191,7 @@ async function requestMergedDraftWithChatCompletions(
         },
         {
           role: 'user',
-          content: buildPrompt(flowTitle, notes),
+          content: buildPrompt(flowTitle, notes, thoughtPatternContext),
         },
       ],
     }),
@@ -211,7 +216,7 @@ async function requestMergedDraftWithChatCompletions(
   return { draft: normalizeDraft(parsed, flowId, flowTitle, notes, now), model };
 }
 
-function buildPrompt(flowTitle: string, notes: Required<SourceNote>[]) {
+function buildPrompt(flowTitle: string, notes: Required<SourceNote>[], thoughtPatternContext = '') {
   const requiredTerms = extractRequiredTerms(flowTitle, notes);
   const noteBlock = notes
     .map((note, index) => [
@@ -234,6 +239,16 @@ function buildPrompt(flowTitle: string, notes: Required<SourceNote>[]) {
     '참고해야 할 원문 핵심어:',
     requiredTerms.join(', '),
     '',
+    ...(thoughtPatternContext ? [
+      '사용자 사고 패턴 데이터셋 참고:',
+      thoughtPatternContext,
+      '',
+      '사고 패턴 데이터셋 사용 규칙:',
+      '- 위 패턴은 원문보다 우선하지 않는다. 원문과 직접 연결될 때만 참고한다.',
+      '- 패턴을 근거로 사용자의 성격, 욕망, 결론을 단정하지 않는다.',
+      '- 패턴은 모호한 표현을 문제/선택지/빈칸/다음 질문으로 구체화하는 보조 재료다.',
+      '',
+    ] : []),
     '수정 목표:',
     '- 결과물은 오피니언 선언문이 아니라 문단별 생각 정리 리포트다.',
     '- 사용자가 “나는 이렇게 생각한다”고 단정한 것처럼 쓰지 않는다.',

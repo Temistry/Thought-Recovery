@@ -1,6 +1,7 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { deleteLocalDbNote, getLocalDbNoteCount, isLocalDbMigratedFromAsyncStorage, listLocalDbNotes, listLocalDbThoughtDrafts, listLocalDbThoughtFlows, markLocalDbMigratedFromAsyncStorage, moveLocalDbNoteToTrash, readLocalDbValue, readLocalDbTrashNoteIds, replaceLocalDbActiveNotes, replaceLocalDbThoughtFlows, restoreLocalDbTrashNote, upsertLocalDbNotes, upsertLocalDbThoughtDraft, writeLocalDbValue } from './localDb';
-import { CloudNoteManifest, LocalSyncMetadata, MergedThoughtDraft, Note, SourceType, ThoughtFlow } from '../types';
+import { deleteLocalDbNote, getLocalDbNoteCount, isLocalDbMigratedFromAsyncStorage, listLocalDbNotes, listLocalDbThoughtDrafts, listLocalDbThoughtFlows, markLocalDbMigratedFromAsyncStorage, moveLocalDbNoteToTrash, readLocalDbThoughtFingerprint, readLocalDbValue, readLocalDbTrashNoteIds, replaceLocalDbActiveNotes, replaceLocalDbThoughtFingerprint, replaceLocalDbThoughtFlows, restoreLocalDbTrashNote, upsertLocalDbNotes, upsertLocalDbThoughtDraft, writeLocalDbValue } from './localDb';
+import { buildThoughtFingerprintSnapshot } from './thoughtFingerprint';
+import { CloudNoteManifest, LocalSyncMetadata, MergedThoughtDraft, Note, SourceType, ThoughtFingerprintSnapshot, ThoughtFlow } from '../types';
 
 const STORAGE_KEY = 'idea-second-brain:local-notes';
 const INDEX_STORAGE_KEY = 'idea-second-brain:local-note-index:v2';
@@ -59,6 +60,19 @@ export async function saveCachedThoughtDraft(draft: MergedThoughtDraft): Promise
 export async function listCachedThoughtDrafts(): Promise<Record<string, MergedThoughtDraft>> {
   await ensureSqliteStoreReady();
   return listLocalDbThoughtDrafts();
+}
+
+export async function rebuildCachedThoughtFingerprint(notes?: Note[]): Promise<ThoughtFingerprintSnapshot> {
+  await ensureSqliteStoreReady();
+  const sourceNotes = notes ?? await listLocalDbNotes();
+  const snapshot = buildThoughtFingerprintSnapshot(sourceNotes.map(normalizeLocalNote));
+  await replaceLocalDbThoughtFingerprint(snapshot);
+  return snapshot;
+}
+
+export async function readCachedThoughtFingerprint(): Promise<ThoughtFingerprintSnapshot | null> {
+  await ensureSqliteStoreReady();
+  return readLocalDbThoughtFingerprint();
 }
 
 export async function listLocalNotes(): Promise<Note[]> {
