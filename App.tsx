@@ -2910,23 +2910,33 @@ function buildFallbackMergedThoughtDraft(
     .filter(Boolean);
   const firstInsight = sourceInsights[0] ?? title;
   const caseExamples = sourceInsights.slice(1, 4);
+  const evidenceText = caseExamples.length ? caseExamples.join(' ') : firstInsight;
+  const concreteAngle = sharedDecisionAxis && sharedDecisionAxis !== sharedProblem ? sharedDecisionAxis : title;
+
   return {
     id: `merged-draft-${slugifyFlowId(title)}-${notes.map((note) => note.id).join('-')}`,
     flowId,
     title,
     body:
-      `나는 메모를 더 많이 쌓고 싶은 게 아니라, 잊힌 생각이 다시 돌아오는 경험을 만들고 싶었던 것 같다. 처음에는 ${firstInsight} 정도의 문제로 생각했다. 녹음이 빠르다는 점, 타이핑보다 말이 쉽다는 점, 떠오른 생각을 놓치지 않는다는 점이 중요해 보였다. 하지만 반복해서 보면 핵심은 단순한 입력 방식이 아니었다.\n\n` +
-      `결국 문제는 ${sharedProblem}이다. 나는 생각을 기록하는 순간보다, 시간이 지난 뒤 그 생각이 다시 나에게 돌아오는 순간에 더 큰 가치를 느끼고 있었다. 그래서 이 앱은 녹음기이면서도 그냥 녹음기가 아니어야 한다. 말한 내용이 전사되고, 비슷한 생각끼리 이어지고, 내가 어떤 문제를 계속 붙잡고 있었는지 다시 보여줘야 한다.\n\n` +
-      (caseExamples.length
-        ? `구체적인 사례를 보면 이 판단이 더 분명해진다. ${caseExamples.join(' ')} 이런 조각들은 서로 다른 메모처럼 보이지만, 실제로는 내가 제품 범위와 기획 방식을 계속 다시 묻고 있었다는 증거다.\n\n`
-        : '') +
-      `그래서 지금 정리된 방향은 저장소가 아니라 회수 경험이다. 모든 메모를 예쁘게 보관하는 것보다, 버려질 뻔한 생각이 다시 올라오고, 중복된 말들이 하나의 글로 자라고, 필요한 순간에 나를 다시 설득하는 구조가 더 중요하다.\n\n` +
-      `이 생각은 결국 내 기획력 문제와도 연결된다. 나는 예전에는 기획을 말로 설명하는 능력처럼 생각했지만, 이제는 기록된 판단을 다시 꺼내고 구조화하는 능력에 가깝다고 본다. 그래서 이 앱은 내가 만든 메모장이 아니라, 내가 놓친 판단을 다시 붙잡게 해주는 장치여야 한다. 지금의 결론은 분명하다. 나는 메모앱을 만들고 싶은 게 아니라, 생각이 사라지지 않고 다시 돌아와 기획으로 자라나는 경험을 만들고 싶다.`,
-    judgmentSummary: [sharedProblem, `${sharedDecisionAxis} 관점에서 다시 정리할 필요가 있다.`],
+      `## 핵심 발견\n${firstInsight} 이 흐름은 ${sharedProblem}이라는 문제를 중심으로 다시 읽을 수 있다. 같은 문장을 반복하는 대신, 원문마다 드러난 표현과 맥락을 기준으로 생각의 방향을 좁혀야 한다.\n\n` +
+      `## 개떡같이 말한 부분을 구체화하면\n흩어진 메모를 그대로 두면 모호하지만, ${concreteAngle}라는 판단축으로 묶으면 사용자가 실제로 정하려는 대상이 조금 더 분명해진다. 이 초안은 결론을 대신 확정하기보다, 어떤 빈칸을 채우면 생각이 행동 가능한 문장으로 바뀌는지 보여준다.\n\n` +
+      `## 생각의 변화\n처음에는 ${firstInsight}에서 출발했다. 이후 메모들이 더해지면서 ${evidenceText} 같은 조각이 보조 근거가 됐다. 지금은 이 조각들을 하나의 결론으로 몰아가기보다, 반복된 문제와 아직 덜 정해진 선택지를 분리해서 보는 단계다.\n\n` +
+      `## 다음에 이어볼 질문\n${makeLocalFallbackNextQuestion(sourceInsights, title)}`,
+    judgmentSummary: [sharedProblem, `${concreteAngle} 관점에서 빈칸을 더 구체화할 필요가 있다.`],
     sourceNoteIds: notes.map((note) => note.id),
     createdAt: now,
     status: 'draft',
   };
+}
+
+function makeLocalFallbackNextQuestion(insights: string[], title: string) {
+  const anchor = insights.find((item) => item.trim().length > 8) ?? title;
+  return `${shortenLocalSentence(anchor)}을 실제 결정이나 다음 행동으로 바꾸려면 무엇을 먼저 정해야 할까?`;
+}
+
+function shortenLocalSentence(value: string) {
+  const first = value.split(/[.!?。！？\n]/)[0]?.trim() || value.trim();
+  return first.length > 54 ? `${first.slice(0, 54)}…` : first;
 }
 
 function makeVirtualThoughtFlowNote(title: string, index: number, now: string): Note {
