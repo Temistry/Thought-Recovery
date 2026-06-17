@@ -1016,20 +1016,13 @@ export default function App() {
 
     return (
       <ScrollView contentContainerStyle={styles.scrollContent}>
-        {session?.user ? (
-          <View style={styles.homeTopBar}>
-            <View />
-            <Pressable
-              accessibilityRole="button"
-              accessibilityLabel="내 정보 보기"
-              style={styles.accountEntryButton}
-              onPress={() => setShowAccount(true)}
-              hitSlop={10}
-            >
-              <Text style={styles.accountEntryText}>{userInitial}</Text>
-            </Pressable>
-          </View>
-        ) : null}
+        <AppTopBar
+          title="오늘"
+          leftIcon="⚙"
+          rightIcon="◴"
+          onLeftPress={() => setShowAccount(true)}
+          onRightPress={() => changeTab('archive')}
+        />
         <TodayRecorderCard
           recording={!!recording}
           saving={saving}
@@ -1074,9 +1067,9 @@ export default function App() {
   function renderOrganized() {
     return (
       <ScrollView contentContainerStyle={styles.retrievalScrollContent}>
-        <View style={styles.pageIntro}>
-          <Text style={styles.sectionTitle}>자라난 생각</Text>
-          <Text style={styles.sectionHint}>흩어진 녹음이 읽을 만한 생각 정리 리포트로 자라나요.</Text>
+        <AppTopBar title="흐름" rightIcon="☷" />
+        <View style={styles.flowMapIntro}>
+          <Text style={styles.flowMapIntroText}>생각들이 연결되며 흐름이 자라나요</Text>
         </View>
 
         <ThoughtFlowSection
@@ -1114,18 +1107,10 @@ export default function App() {
     }
 
     return (
-      <ScrollView contentContainerStyle={styles.retrievalScrollContent}>
-        <View style={styles.pageIntroRow}>
-          <View>
-            <Text style={styles.sectionTitle}>보관</Text>
-            <Text style={styles.sectionHint}>녹음과 원문 메모가 안전하게 남아 있는 곳이에요.</Text>
-          </View>
-          <Pressable style={styles.trashButton} onPress={openTrash}>
-            <Text style={styles.trashButtonText}>휴지통</Text>
-          </Pressable>
-        </View>
-        <View style={styles.searchCard}>
-          <Text style={styles.cardTitle}>필요할 때 검색</Text>
+      <View style={styles.screenWithFab}>
+        <ScrollView contentContainerStyle={styles.retrievalScrollContent}>
+        <AppTopBar title="보관" rightIcon="…" onRightPress={openTrash} />
+        <View style={styles.searchCardCompact}>
           <TextInput
             style={styles.searchInput}
             placeholder="녹음, 원문, 정리된 제목을 검색"
@@ -1135,7 +1120,16 @@ export default function App() {
         </View>
         {archivePreviewNotes.length ? <Text style={styles.archivePreviewHint}>최근 {Math.min(archivePreviewNotes.length, ARCHIVE_FAST_PREVIEW_NOTES)}개 먼저 보여주는 중</Text> : null}
         {renderArchiveGroups(visibleArchiveGroups, '아직 보관된 녹음이나 메모가 없어요.')}
-      </ScrollView>
+        </ScrollView>
+        <SpringPressable
+          style={[styles.archiveFloatingMic, recording && styles.archiveFloatingMicActive]}
+          onPress={recording ? stopRecording : startRecording}
+          disabled={saving}
+          accessibilityLabel="빠른 녹음"
+        >
+          <Text style={styles.archiveFloatingMicText}>🎙</Text>
+        </SpringPressable>
+      </View>
     );
   }
 
@@ -1483,6 +1477,32 @@ function FloatingCaptureBar({
   );
 }
 
+function AppTopBar({
+  title,
+  leftIcon,
+  rightIcon,
+  onLeftPress,
+  onRightPress,
+}: {
+  title: string;
+  leftIcon?: string;
+  rightIcon?: string;
+  onLeftPress?: () => void;
+  onRightPress?: () => void;
+}) {
+  return (
+    <View style={styles.appTopBar}>
+      <Pressable style={styles.topIconButton} onPress={onLeftPress} disabled={!onLeftPress} hitSlop={10}>
+        <Text style={styles.topIconText}>{leftIcon ?? ''}</Text>
+      </Pressable>
+      <Text style={styles.appTopTitle}>{title}</Text>
+      <Pressable style={styles.topIconButton} onPress={onRightPress} disabled={!onRightPress} hitSlop={10}>
+        <Text style={styles.topIconText}>{rightIcon ?? ''}</Text>
+      </Pressable>
+    </View>
+  );
+}
+
 function SpringPressable({
   children,
   style,
@@ -1751,6 +1771,42 @@ function graphSourcePositionStyle(index: number) {
   return styles.graphSourceNodeLeft;
 }
 
+function DetailConnectionMap({
+  centerTitle,
+  notes,
+  onOpenNote,
+}: {
+  centerTitle: string;
+  notes: Note[];
+  onOpenNote: (note: Note) => void;
+}) {
+  return (
+    <View style={styles.detailConnectionMap}>
+      <View style={styles.detailMapCenter}>
+        <Text style={styles.detailMapCenterIcon}>🌱</Text>
+        <Text style={styles.detailMapCenterText} numberOfLines={1}>{centerTitle}</Text>
+      </View>
+      {notes.map((note, index) => (
+        <Pressable
+          key={note.id}
+          style={[styles.detailMapNode, detailMapNodePositionStyle(index)]}
+          onPress={() => onOpenNote(note)}
+        >
+          <Text style={styles.detailMapNodeIcon}>{note.source_type === 'voice' ? '🎙' : '✎'}</Text>
+          <Text style={styles.detailMapNodeText} numberOfLines={1}>{note.ai_title || makeDraftTitle(note.raw_text)}</Text>
+        </Pressable>
+      ))}
+    </View>
+  );
+}
+
+function detailMapNodePositionStyle(index: number) {
+  if (index === 0) return styles.detailMapNodeTop;
+  if (index === 1) return styles.detailMapNodeRight;
+  if (index === 2) return styles.detailMapNodeBottom;
+  return styles.detailMapNodeLeft;
+}
+
 
 function AppBackButton({ label, onPress, style }: { label: string; onPress: () => void; style?: any }) {
   return (
@@ -1897,6 +1953,7 @@ function ThoughtFlowDetailScreen({
           ) : null}
           {generationState?.error ? <Text style={styles.voiceErrorText}>{generationState.error}</Text> : null}
           <CopyableText style={styles.mergedDraftBody} copyValue={draft.body}>{draft.body}</CopyableText>
+          <DetailConnectionMap centerTitle={flow.title} notes={flow.notes.slice(0, 4)} onOpenNote={onOpenNote} />
 
           <View style={styles.compactActionRow}>
             <Pressable style={[styles.primaryButton, isSaved && styles.savedPrimaryButton]} onPress={saveDraft}>
@@ -2245,11 +2302,7 @@ function NoteDetail({
       />
 
       {relatedNotes.length ? (
-        <View style={styles.rediscoveryBanner}>
-          <Text style={styles.rediscoveryBannerKicker}>연결된 생각</Text>
-          <Text style={styles.rediscoveryBannerTitle}>이전에 비슷한 생각을 {relatedNotes.length}개 남겼어요</Text>
-          <Text style={styles.rediscoveryBannerBody}>아래에서 눌러 바로 이어볼 수 있어요.</Text>
-        </View>
+        <DetailConnectionMap centerTitle={note.ai_title || makeDraftTitle(note.raw_text)} notes={relatedNotes.slice(0, 4)} onOpenNote={onOpenRelated} />
       ) : null}
 
       <View style={styles.detailSection}>
@@ -3413,7 +3466,7 @@ const styles = StyleSheet.create({
     width: '100%',
     maxWidth: '100%',
     overflow: 'hidden',
-    backgroundColor: '#fbfaf7',
+    backgroundColor: '#fffdfb',
   },
   container: {
     flex: 1,
@@ -3421,11 +3474,12 @@ const styles = StyleSheet.create({
     maxWidth: '100%',
     minWidth: 0,
     alignSelf: 'flex-start',
-    paddingHorizontal: 16,
-    paddingTop: 10,
-    paddingBottom: 12,
+    paddingHorizontal: 18,
+    paddingTop: 8,
+    paddingBottom: 10,
     gap: 12,
     overflow: 'hidden',
+    backgroundColor: '#fffdfb',
   },
   header: {
     gap: 4,
@@ -3480,6 +3534,31 @@ const styles = StyleSheet.create({
     justifyContent: 'flex-end',
     flexShrink: 0,
     gap: 10,
+  },
+  appTopBar: {
+    minHeight: 42,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 2,
+  },
+  appTopTitle: {
+    color: '#141312',
+    fontSize: 20,
+    fontWeight: '900',
+    letterSpacing: -0.3,
+  },
+  topIconButton: {
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  topIconText: {
+    color: '#787a7d',
+    fontSize: 20,
+    fontWeight: '800',
   },
   homeTopBar: {
     flexDirection: 'row',
@@ -4113,17 +4192,17 @@ const styles = StyleSheet.create({
     marginTop: 30,
   },
   noteCard: {
-    backgroundColor: '#fffefd',
-    borderColor: '#eee7df',
+    backgroundColor: '#ffffff',
+    borderColor: '#f0eeeb',
     borderWidth: 1,
-    borderRadius: 16,
-    paddingVertical: 15,
+    borderRadius: 18,
+    paddingVertical: 14,
     paddingHorizontal: 15,
     gap: 8,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 6 },
-    shadowOpacity: 0.05,
-    shadowRadius: 14,
+    shadowColor: '#1e1712',
+    shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.045,
+    shadowRadius: 16,
     elevation: 1,
   },
   processingCard: {
@@ -4441,7 +4520,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    backgroundColor: '#fbfaf7',
+    backgroundColor: '#fffdfb',
     paddingBottom: 8,
     zIndex: 10,
     elevation: 5,
@@ -4454,14 +4533,12 @@ const styles = StyleSheet.create({
   backButton: {
     alignSelf: 'flex-start',
     borderRadius: 999,
-    paddingHorizontal: 13,
-    paddingVertical: 9,
-    minWidth: 104,
-    minHeight: 50,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    minWidth: 74,
+    minHeight: 42,
     justifyContent: 'center',
-    backgroundColor: '#fff7eb',
-    borderColor: '#eadbc8',
-    borderWidth: 1,
+    backgroundColor: '#fffdfb',
   },
   backButtonInner: {
     flexDirection: 'row',
@@ -4493,7 +4570,7 @@ const styles = StyleSheet.create({
     minWidth: 38,
     minHeight: 38,
     borderRadius: 999,
-    backgroundColor: '#f2e7d7',
+    backgroundColor: '#f5f4f2',
     alignItems: 'center',
     justifyContent: 'center',
     paddingHorizontal: 10,
@@ -4504,12 +4581,10 @@ const styles = StyleSheet.create({
     fontWeight: '900',
   },
   detailHero: {
-    backgroundColor: '#fbfaf7',
-    borderBottomColor: '#e8e1d8',
-    borderBottomWidth: 1,
+    backgroundColor: '#fffdfb',
     paddingTop: 8,
     paddingBottom: 16,
-    gap: 11,
+    gap: 12,
   },
   detailTypeBanner: {
     flexDirection: 'row',
@@ -4631,12 +4706,16 @@ const styles = StyleSheet.create({
     gap: 14,
   },
   flowMergedHero: {
-    backgroundColor: '#fffefd',
-    borderColor: '#f0d7cf',
+    backgroundColor: '#ffffff',
+    borderColor: '#f0eeeb',
     borderWidth: 1,
     borderRadius: 26,
     padding: 20,
     gap: 15,
+    shadowColor: '#1e1712',
+    shadowOffset: { width: 0, height: 10 },
+    shadowOpacity: 0.05,
+    shadowRadius: 18,
   },
   flowMergedKicker: {
     color: '#9a6b2f',
@@ -5191,13 +5270,14 @@ const styles = StyleSheet.create({
     gap: 11,
   },
   searchInput: {
-    backgroundColor: '#fff',
-    borderColor: '#e7d7bf',
+    backgroundColor: '#f5f4f2',
+    borderColor: '#f5f4f2',
     borderWidth: 1,
-    borderRadius: 18,
+    borderRadius: 16,
     paddingHorizontal: 14,
-    paddingVertical: 13,
+    paddingVertical: 12,
     fontSize: 15,
+    color: '#22201e',
   },
   suggestionWrap: {
     flexDirection: 'row',
@@ -5220,6 +5300,48 @@ const styles = StyleSheet.create({
     maxWidth: '100%',
     gap: 14,
     paddingBottom: 176,
+  },
+  flowMapIntro: {
+    paddingHorizontal: 2,
+    marginTop: -4,
+  },
+  flowMapIntroText: {
+    color: '#8d918f',
+    fontSize: 12,
+    fontWeight: '700',
+  },
+  screenWithFab: {
+    flex: 1,
+    position: 'relative',
+  },
+  searchCardCompact: {
+    backgroundColor: '#f5f4f2',
+    borderRadius: 18,
+    paddingHorizontal: 2,
+    paddingVertical: 2,
+  },
+  archiveFloatingMic: {
+    position: 'absolute',
+    right: 16,
+    bottom: 94,
+    width: 58,
+    height: 58,
+    borderRadius: 29,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#f06458',
+    shadowColor: '#d9594f',
+    shadowOffset: { width: 0, height: 10 },
+    shadowOpacity: 0.26,
+    shadowRadius: 18,
+    elevation: 5,
+  },
+  archiveFloatingMicActive: {
+    backgroundColor: '#db4b42',
+  },
+  archiveFloatingMicText: {
+    color: '#fff',
+    fontSize: 26,
   },
   retrievalHeroTopRow: {
     flexDirection: 'row',
@@ -5397,6 +5519,80 @@ const styles = StyleSheet.create({
     fontSize: 14,
     lineHeight: 21,
     fontWeight: '600',
+  },
+  detailConnectionMap: {
+    height: 180,
+    borderRadius: 24,
+    backgroundColor: '#fbfaf7',
+    borderWidth: 1,
+    borderColor: '#eee7df',
+    position: 'relative',
+    overflow: 'hidden',
+    marginTop: 4,
+  },
+  detailMapCenter: {
+    position: 'absolute',
+    left: '50%',
+    top: '50%',
+    width: 96,
+    height: 78,
+    marginLeft: -48,
+    marginTop: -39,
+    borderRadius: 28,
+    backgroundColor: '#eff8f2',
+    borderWidth: 1,
+    borderColor: '#cfe8d8',
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 10,
+    gap: 4,
+  },
+  detailMapCenterIcon: {
+    fontSize: 18,
+  },
+  detailMapCenterText: {
+    color: '#2b2a26',
+    fontSize: 11,
+    fontWeight: '900',
+    textAlign: 'center',
+  },
+  detailMapNode: {
+    position: 'absolute',
+    width: 82,
+    minHeight: 46,
+    borderRadius: 20,
+    backgroundColor: '#ffffff',
+    borderWidth: 1,
+    borderColor: '#e2e8e5',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 8,
+    gap: 2,
+  },
+  detailMapNodeTop: {
+    top: 13,
+    left: '39%',
+  },
+  detailMapNodeRight: {
+    top: 68,
+    right: 15,
+  },
+  detailMapNodeBottom: {
+    bottom: 13,
+    left: '39%',
+  },
+  detailMapNodeLeft: {
+    top: 68,
+    left: 15,
+  },
+  detailMapNodeIcon: {
+    fontSize: 14,
+  },
+  detailMapNodeText: {
+    color: '#55514a',
+    fontSize: 10,
+    fontWeight: '800',
+    maxWidth: 68,
   },
   thoughtFlowCard: {
     backgroundColor: '#fffefd',
