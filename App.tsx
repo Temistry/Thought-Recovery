@@ -33,12 +33,12 @@ import { isSupabaseConfigured, supabase } from './src/lib/supabase';
 import { Note, SourceType } from './src/types';
 
 const AUDIO_BUCKET = 'note-audio';
+const AnimatedPressable = Animated.createAnimatedComponent(Pressable);
 const RETRIEVAL_FEEDBACK_KEY = 'idea-second-brain:retrieval-feedback';
 const COPY_FEEDBACK_MS = 1400;
 const ARCHIVE_FAST_PREVIEW_NOTES = 24;
 const THOUGHT_FLOW_FINGERPRINT_KEY = 'idea-second-brain:thought-flow-fingerprint:v1';
 const SCREEN_WIDTH = Dimensions.get('window').width;
-const AnimatedPressable = Animated.createAnimatedComponent(Pressable);
 
 
 type AppTab = 'today' | 'organized' | 'archive';
@@ -1035,7 +1035,11 @@ export default function App() {
           saving={saving}
           onToggleRecording={recording ? stopRecording : startRecording}
         />
-        <Text style={styles.todayInlineStatus}>오늘 {todayStoredCount}개 저장 · {processingCount}개 정리 중</Text>
+        <View style={styles.todaySignalGrid}>
+          <TodaySignalCard icon="✓" label="저장됨" value={todayStoredCount} tone="mint" onPress={() => changeTab('archive')} />
+          <TodaySignalCard icon="↔" label="연결 중" value={processingCount} tone="blue" onPress={() => changeTab('archive')} />
+          <TodaySignalCard icon="🌱" label="자라남" value={visibleThoughtFlows.length} tone="peach" onPress={() => changeTab('organized')} />
+        </View>
 
         <View style={styles.retrievalSection}>
           <View style={styles.retrievalSectionHeader}>
@@ -1479,6 +1483,70 @@ function FloatingCaptureBar({
   );
 }
 
+function SpringPressable({
+  children,
+  style,
+  onPress,
+  disabled,
+  accessibilityLabel,
+}: {
+  children: ReactNode;
+  style?: any;
+  onPress?: () => void;
+  disabled?: boolean;
+  accessibilityLabel?: string;
+}) {
+  const scale = useRef(new Animated.Value(1)).current;
+
+  function pressIn() {
+    Animated.spring(scale, { toValue: 0.96, friction: 8, tension: 220, useNativeDriver: true }).start();
+    void Haptics.selectionAsync().catch(() => undefined);
+  }
+
+  function pressOut() {
+    Animated.spring(scale, { toValue: 1, friction: 5, tension: 180, useNativeDriver: true }).start();
+  }
+
+  return (
+    <AnimatedPressable
+      accessibilityRole="button"
+      accessibilityLabel={accessibilityLabel}
+      disabled={disabled}
+      style={[style, { transform: [{ scale }] }]}
+      onPress={onPress}
+      onPressIn={pressIn}
+      onPressOut={pressOut}
+    >
+      {children}
+    </AnimatedPressable>
+  );
+}
+
+function TodaySignalCard({
+  icon,
+  label,
+  value,
+  tone,
+  onPress,
+}: {
+  icon: string;
+  label: string;
+  value: number;
+  tone: 'mint' | 'blue' | 'peach';
+  onPress: () => void;
+}) {
+  const cardToneStyle = tone === 'mint' ? styles.todaySignalCardMint : tone === 'blue' ? styles.todaySignalCardBlue : styles.todaySignalCardPeach;
+  const iconToneStyle = tone === 'mint' ? styles.todaySignalIconMint : tone === 'blue' ? styles.todaySignalIconBlue : styles.todaySignalIconPeach;
+
+  return (
+    <SpringPressable style={[styles.todaySignalCard, cardToneStyle]} onPress={onPress} accessibilityLabel={`${label} ${value}개`}>
+      <Text style={[styles.todaySignalIcon, iconToneStyle]}>{icon}</Text>
+      <Text style={styles.todaySignalLabel}>{label}</Text>
+      <Text style={styles.todaySignalValue}>{value}</Text>
+    </SpringPressable>
+  );
+}
+
 function TodayRecorderCard({
   recording,
   saving,
@@ -1636,18 +1704,51 @@ function ThoughtFlowSection({
 function ThoughtFlowCard({
   flow,
   onOpenFlow,
+  onOpenNote,
 }: {
   flow: ThoughtFlow;
   onOpenFlow: (flow: ThoughtFlow) => void;
   onOpenNote: (note: Note) => void;
 }) {
   const body = flow.mergedDraft?.body || flow.synthesis;
+  const satellites = flow.notes.slice(0, 4);
 
   return (
-    <Pressable style={styles.thoughtFlowCard} onPress={() => onOpenFlow(flow)}>
-      <Text style={styles.flowDraftText} numberOfLines={6}>{body}</Text>
-    </Pressable>
+    <SpringPressable style={styles.thoughtGraphCard} onPress={() => onOpenFlow(flow)} accessibilityLabel={`${flow.title} 자라난 생각 열기`}>
+      <View style={styles.thoughtGraphCanvas}>
+        <View style={[styles.graphConnector, styles.graphConnectorOne]} />
+        <View style={[styles.graphConnector, styles.graphConnectorTwo]} />
+        <View style={[styles.graphConnector, styles.graphConnectorThree]} />
+        <View style={[styles.graphConnector, styles.graphConnectorFour]} />
+        <View style={styles.graphCenterNode}>
+          <Text style={styles.graphCenterIcon}>🌱</Text>
+          <Text style={styles.graphCenterTitle} numberOfLines={2}>{flow.title}</Text>
+        </View>
+        {satellites.map((note, index) => (
+          <Pressable
+            key={note.id}
+            style={[styles.graphSourceNode, graphSourcePositionStyle(index)]}
+            onPress={(event) => {
+              event.stopPropagation?.();
+              void Haptics.selectionAsync().catch(() => undefined);
+              onOpenNote(note);
+            }}
+          >
+            <Text style={styles.graphSourceIcon}>{note.source_type === 'voice' ? '🎙' : '✎'}</Text>
+            <Text style={styles.graphSourceTitle} numberOfLines={1}>{note.ai_title || makeDraftTitle(note.raw_text)}</Text>
+          </Pressable>
+        ))}
+      </View>
+      <Text style={styles.graphCardBody} numberOfLines={3}>{body}</Text>
+    </SpringPressable>
   );
+}
+
+function graphSourcePositionStyle(index: number) {
+  if (index === 0) return styles.graphSourceNodeTop;
+  if (index === 1) return styles.graphSourceNodeRight;
+  if (index === 2) return styles.graphSourceNodeBottom;
+  return styles.graphSourceNodeLeft;
 }
 
 
@@ -3733,6 +3834,55 @@ const styles = StyleSheet.create({
     fontSize: 15,
     fontWeight: '900',
   },
+  todaySignalGrid: {
+    flexDirection: 'row',
+    gap: 10,
+  },
+  todaySignalCard: {
+    flex: 1,
+    minHeight: 82,
+    borderRadius: 18,
+    paddingVertical: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 4,
+    borderWidth: 1,
+  },
+  todaySignalCardMint: {
+    backgroundColor: '#eff9f3',
+    borderColor: '#d7eee0',
+  },
+  todaySignalCardBlue: {
+    backgroundColor: '#f0f5ff',
+    borderColor: '#dae7ff',
+  },
+  todaySignalCardPeach: {
+    backgroundColor: '#fff3ed',
+    borderColor: '#ffe0d4',
+  },
+  todaySignalIcon: {
+    fontSize: 17,
+    fontWeight: '900',
+  },
+  todaySignalIconMint: {
+    color: '#5dbb8a',
+  },
+  todaySignalIconBlue: {
+    color: '#5d82c8',
+  },
+  todaySignalIconPeach: {
+    color: '#e56d4f',
+  },
+  todaySignalLabel: {
+    color: '#7b746d',
+    fontSize: 12,
+    fontWeight: '800',
+  },
+  todaySignalValue: {
+    color: '#171412',
+    fontSize: 15,
+    fontWeight: '900',
+  },
   todayRecorderSubtitle: {
     color: '#d7c7b6',
     fontSize: 13,
@@ -5128,6 +5278,125 @@ const styles = StyleSheet.create({
     color: '#8f8578',
     fontSize: 12,
     fontWeight: '800',
+  },
+  thoughtGraphCard: {
+    backgroundColor: '#fffefd',
+    borderColor: '#eee7df',
+    borderWidth: 1,
+    borderRadius: 26,
+    padding: 14,
+    gap: 12,
+    shadowColor: '#3b2d25',
+    shadowOpacity: 0.06,
+    shadowRadius: 18,
+    shadowOffset: { width: 0, height: 8 },
+  },
+  thoughtGraphCanvas: {
+    height: 244,
+    borderRadius: 24,
+    backgroundColor: '#fbfaf7',
+    overflow: 'hidden',
+    position: 'relative',
+  },
+  graphConnector: {
+    position: 'absolute',
+    left: '50%',
+    top: '50%',
+    width: 1,
+    height: 122,
+    backgroundColor: '#d9e2db',
+    opacity: 0.82,
+  },
+  graphConnectorOne: {
+    transform: [{ rotate: '25deg' }],
+  },
+  graphConnectorTwo: {
+    transform: [{ rotate: '112deg' }],
+  },
+  graphConnectorThree: {
+    transform: [{ rotate: '-34deg' }],
+  },
+  graphConnectorFour: {
+    transform: [{ rotate: '-118deg' }],
+  },
+  graphCenterNode: {
+    position: 'absolute',
+    left: '50%',
+    top: '50%',
+    width: 116,
+    minHeight: 104,
+    marginLeft: -58,
+    marginTop: -52,
+    borderRadius: 58,
+    backgroundColor: '#eff8f2',
+    borderWidth: 1,
+    borderColor: '#cde7d6',
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 12,
+    gap: 5,
+  },
+  graphCenterIcon: {
+    fontSize: 24,
+  },
+  graphCenterTitle: {
+    color: '#20201d',
+    fontSize: 13,
+    fontWeight: '900',
+    lineHeight: 17,
+    textAlign: 'center',
+  },
+  graphSourceNode: {
+    position: 'absolute',
+    minWidth: 86,
+    maxWidth: 118,
+    minHeight: 52,
+    borderRadius: 22,
+    backgroundColor: '#ffffff',
+    borderWidth: 1,
+    borderColor: '#e1e8e3',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    gap: 2,
+    shadowColor: '#2b332e',
+    shadowOpacity: 0.06,
+    shadowRadius: 12,
+    shadowOffset: { width: 0, height: 5 },
+  },
+  graphSourceNodeTop: {
+    top: 16,
+    left: '34%',
+  },
+  graphSourceNodeRight: {
+    right: 16,
+    top: 92,
+  },
+  graphSourceNodeBottom: {
+    bottom: 16,
+    left: '35%',
+  },
+  graphSourceNodeLeft: {
+    left: 16,
+    top: 96,
+  },
+  graphSourceIcon: {
+    color: '#6c91a8',
+    fontSize: 16,
+  },
+  graphSourceTitle: {
+    color: '#4a4742',
+    fontSize: 11,
+    fontWeight: '800',
+    textAlign: 'center',
+    maxWidth: 96,
+  },
+  graphCardBody: {
+    color: '#514d47',
+    fontSize: 14,
+    lineHeight: 21,
+    fontWeight: '600',
   },
   thoughtFlowCard: {
     backgroundColor: '#fffefd',
