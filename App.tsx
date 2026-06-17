@@ -1724,87 +1724,108 @@ function ThoughtFlowSection({
 function ThoughtFlowCard({
   flow,
   onOpenFlow,
-  onOpenNote,
 }: {
   flow: ThoughtFlow;
   onOpenFlow: (flow: ThoughtFlow) => void;
   onOpenNote: (note: Note) => void;
 }) {
-  const body = flow.mergedDraft?.body || flow.synthesis;
-  const satellites = flow.notes.slice(0, 4);
+  const report = buildReadableThoughtReport(flow);
 
   return (
-    <SpringPressable style={styles.thoughtGraphCard} onPress={() => onOpenFlow(flow)} accessibilityLabel={`${flow.title} 자라난 생각 열기`}>
-      <View style={styles.thoughtGraphCanvas}>
-        <View style={[styles.graphConnector, styles.graphConnectorOne]} />
-        <View style={[styles.graphConnector, styles.graphConnectorTwo]} />
-        <View style={[styles.graphConnector, styles.graphConnectorThree]} />
-        <View style={[styles.graphConnector, styles.graphConnectorFour]} />
-        <View style={styles.graphCenterNode}>
-          <Text style={styles.graphCenterIcon}>🌱</Text>
-          <Text style={styles.graphCenterTitle} numberOfLines={2}>{flow.title}</Text>
+    <SpringPressable style={styles.thoughtReportCard} onPress={() => onOpenFlow(flow)} accessibilityLabel={`${flow.title} 자라난 생각 리포트 열기`}>
+      <View style={styles.thoughtReportHeader}>
+        <View style={styles.thoughtReportSeed}>
+          <Text style={styles.thoughtReportSeedText}>🌱</Text>
         </View>
-        {satellites.map((note, index) => (
-          <Pressable
-            key={note.id}
-            style={[styles.graphSourceNode, graphSourcePositionStyle(index)]}
-            onPress={(event) => {
-              event.stopPropagation?.();
-              void Haptics.selectionAsync().catch(() => undefined);
-              onOpenNote(note);
-            }}
-          >
-            <Text style={styles.graphSourceIcon}>{note.source_type === 'voice' ? '🎙' : '✎'}</Text>
-            <Text style={styles.graphSourceTitle} numberOfLines={1}>{note.ai_title || makeDraftTitle(note.raw_text)}</Text>
-          </Pressable>
+        <View style={styles.thoughtReportHeaderText}>
+          <Text style={styles.thoughtReportKicker}>자라난 생각 리포트</Text>
+          <Text style={styles.thoughtReportTitle} numberOfLines={2}>{flow.title}</Text>
+        </View>
+      </View>
+
+      <Text style={styles.thoughtReportSummary} numberOfLines={4}>{report.summary}</Text>
+
+      <View style={styles.thoughtReportTimeline}>
+        <ReportStage label="처음" body={report.firstProblem} />
+        <ReportStage label="반복" body={report.repeatedConcern} />
+        <ReportStage label="현재" body={report.currentConclusion} />
+      </View>
+
+      <View style={styles.sixWGrid}>
+        {report.sixW.map((item) => (
+          <View key={item.label} style={styles.sixWChip}>
+            <Text style={styles.sixWLabel}>{item.label}</Text>
+            <Text style={styles.sixWValue} numberOfLines={1}>{item.value}</Text>
+          </View>
         ))}
       </View>
-      <Text style={styles.graphCardBody} numberOfLines={3}>{body}</Text>
+
+      <View style={styles.nextQuestionCard}>
+        <Text style={styles.nextQuestionLabel}>다음 질문</Text>
+        <Text style={styles.nextQuestionBody} numberOfLines={2}>{flow.nextQuestion}</Text>
+      </View>
+
+      <View style={styles.reportEvidenceRow}>
+        <Text style={styles.reportEvidenceText}>근거 원문 {flow.notes.length}개</Text>
+        <Text style={styles.reportOpenText}>읽기 ›</Text>
+      </View>
     </SpringPressable>
   );
 }
 
-function graphSourcePositionStyle(index: number) {
-  if (index === 0) return styles.graphSourceNodeTop;
-  if (index === 1) return styles.graphSourceNodeRight;
-  if (index === 2) return styles.graphSourceNodeBottom;
-  return styles.graphSourceNodeLeft;
-}
-
-function DetailConnectionMap({
-  centerTitle,
-  notes,
-  onOpenNote,
-}: {
-  centerTitle: string;
-  notes: Note[];
-  onOpenNote: (note: Note) => void;
-}) {
+function ReportStage({ label, body }: { label: string; body: string }) {
   return (
-    <View style={styles.detailConnectionMap}>
-      <View style={styles.detailMapCenter}>
-        <Text style={styles.detailMapCenterIcon}>🌱</Text>
-        <Text style={styles.detailMapCenterText} numberOfLines={1}>{centerTitle}</Text>
-      </View>
-      {notes.map((note, index) => (
-        <Pressable
-          key={note.id}
-          style={[styles.detailMapNode, detailMapNodePositionStyle(index)]}
-          onPress={() => onOpenNote(note)}
-        >
-          <Text style={styles.detailMapNodeIcon}>{note.source_type === 'voice' ? '🎙' : '✎'}</Text>
-          <Text style={styles.detailMapNodeText} numberOfLines={1}>{note.ai_title || makeDraftTitle(note.raw_text)}</Text>
-        </Pressable>
-      ))}
+    <View style={styles.reportStageRow}>
+      <Text style={styles.reportStageLabel}>{label}</Text>
+      <Text style={styles.reportStageBody} numberOfLines={2}>{body}</Text>
     </View>
   );
 }
 
-function detailMapNodePositionStyle(index: number) {
-  if (index === 0) return styles.detailMapNodeTop;
-  if (index === 1) return styles.detailMapNodeRight;
-  if (index === 2) return styles.detailMapNodeBottom;
-  return styles.detailMapNodeLeft;
+function buildReadableThoughtReport(flow: ThoughtFlow) {
+  const sortedNotes = [...flow.notes].sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
+  const summaries = sortedNotes.map((note) => note.ai_summary || makeDraftSummary(note.raw_text)).filter(Boolean);
+  const firstProblem = summaries[0] || flow.sharedProblem || flow.title;
+  const repeatedConcern = flow.sharedProblem || summaries[1] || flow.synthesis;
+  const currentConclusion = flow.mergedDraft?.judgmentSummary?.[0] || flow.sharedDecisionAxis || flow.synthesis;
+  const summary = flow.mergedDraft?.body?.split('\n').find((line) => line.trim().length > 20)?.trim() || flow.synthesis;
+  const firstDate = sortedNotes.length ? formatDate(sortedNotes[0].created_at) : formatDate(flow.createdAt);
+  const latestDate = sortedNotes.length ? formatDate(sortedNotes[sortedNotes.length - 1].created_at) : formatDate(flow.updatedAt);
+  return {
+    summary,
+    firstProblem,
+    repeatedConcern,
+    currentConclusion,
+    sixW: [
+      { label: '누가', value: '나의 반복 메모' },
+      { label: '무엇을', value: flow.title },
+      { label: '언제', value: firstDate === latestDate ? latestDate : `${firstDate} → ${latestDate}` },
+      { label: '어디서', value: '음성/원문 메모' },
+      { label: '왜', value: flow.sharedProblem || '반복해서 떠오른 문제' },
+      { label: '어떻게', value: flow.nextQuestion },
+    ],
+  };
+}
+
+function ReadableReportBreakdown({ flow }: { flow: ThoughtFlow }) {
+  const report = buildReadableThoughtReport(flow);
+  return (
+    <View style={styles.readableReportBox}>
+      <View style={styles.thoughtReportTimeline}>
+        <ReportStage label="처음" body={report.firstProblem} />
+        <ReportStage label="반복" body={report.repeatedConcern} />
+        <ReportStage label="현재" body={report.currentConclusion} />
+      </View>
+      <View style={styles.sixWGrid}>
+        {report.sixW.map((item) => (
+          <View key={item.label} style={styles.sixWChip}>
+            <Text style={styles.sixWLabel}>{item.label}</Text>
+            <Text style={styles.sixWValue} numberOfLines={1}>{item.value}</Text>
+          </View>
+        ))}
+      </View>
+    </View>
+  );
 }
 
 
@@ -1952,8 +1973,8 @@ function ThoughtFlowDetailScreen({
             </View>
           ) : null}
           {generationState?.error ? <Text style={styles.voiceErrorText}>{generationState.error}</Text> : null}
+          <ReadableReportBreakdown flow={flow} />
           <CopyableText style={styles.mergedDraftBody} copyValue={draft.body}>{draft.body}</CopyableText>
-          <DetailConnectionMap centerTitle={flow.title} notes={flow.notes.slice(0, 4)} onOpenNote={onOpenNote} />
 
           <View style={styles.compactActionRow}>
             <Pressable style={[styles.primaryButton, isSaved && styles.savedPrimaryButton]} onPress={saveDraft}>
@@ -2302,7 +2323,10 @@ function NoteDetail({
       />
 
       {relatedNotes.length ? (
-        <DetailConnectionMap centerTitle={note.ai_title || makeDraftTitle(note.raw_text)} notes={relatedNotes.slice(0, 4)} onOpenNote={onOpenRelated} />
+        <View style={styles.rediscoveryBanner}>
+          <Text style={styles.rediscoveryBannerKicker}>연결된 생각</Text>
+          <Text style={styles.rediscoveryBannerTitle}>이전에 비슷한 생각을 {relatedNotes.length}개 남겼어요</Text>
+        </View>
       ) : null}
 
       <View style={styles.detailSection}>
@@ -5401,198 +5425,139 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: '800',
   },
-  thoughtGraphCard: {
-    backgroundColor: '#fffefd',
-    borderColor: '#eee7df',
+  thoughtReportCard: {
+    backgroundColor: '#ffffff',
+    borderColor: '#f0eeeb',
     borderWidth: 1,
     borderRadius: 26,
-    padding: 14,
-    gap: 12,
-    shadowColor: '#3b2d25',
-    shadowOpacity: 0.06,
+    padding: 18,
+    gap: 14,
+    shadowColor: '#1e1712',
+    shadowOpacity: 0.055,
     shadowRadius: 18,
-    shadowOffset: { width: 0, height: 8 },
+    shadowOffset: { width: 0, height: 10 },
   },
-  thoughtGraphCanvas: {
-    height: 244,
+  thoughtReportHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+  },
+  thoughtReportSeed: {
+    width: 48,
+    height: 48,
     borderRadius: 24,
-    backgroundColor: '#fbfaf7',
-    overflow: 'hidden',
-    position: 'relative',
-  },
-  graphConnector: {
-    position: 'absolute',
-    left: '50%',
-    top: '50%',
-    width: 1,
-    height: 122,
-    backgroundColor: '#d9e2db',
-    opacity: 0.82,
-  },
-  graphConnectorOne: {
-    transform: [{ rotate: '25deg' }],
-  },
-  graphConnectorTwo: {
-    transform: [{ rotate: '112deg' }],
-  },
-  graphConnectorThree: {
-    transform: [{ rotate: '-34deg' }],
-  },
-  graphConnectorFour: {
-    transform: [{ rotate: '-118deg' }],
-  },
-  graphCenterNode: {
-    position: 'absolute',
-    left: '50%',
-    top: '50%',
-    width: 116,
-    minHeight: 104,
-    marginLeft: -58,
-    marginTop: -52,
-    borderRadius: 58,
+    alignItems: 'center',
+    justifyContent: 'center',
     backgroundColor: '#eff8f2',
     borderWidth: 1,
-    borderColor: '#cde7d6',
-    alignItems: 'center',
-    justifyContent: 'center',
-    padding: 12,
-    gap: 5,
+    borderColor: '#d5ebdc',
   },
-  graphCenterIcon: {
-    fontSize: 24,
+  thoughtReportSeedText: {
+    fontSize: 22,
   },
-  graphCenterTitle: {
-    color: '#20201d',
-    fontSize: 13,
-    fontWeight: '900',
-    lineHeight: 17,
-    textAlign: 'center',
+  thoughtReportHeaderText: {
+    flex: 1,
+    gap: 3,
+    minWidth: 0,
   },
-  graphSourceNode: {
-    position: 'absolute',
-    minWidth: 86,
-    maxWidth: 118,
-    minHeight: 52,
-    borderRadius: 22,
-    backgroundColor: '#ffffff',
-    borderWidth: 1,
-    borderColor: '#e1e8e3',
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingHorizontal: 10,
-    paddingVertical: 8,
-    gap: 2,
-    shadowColor: '#2b332e',
-    shadowOpacity: 0.06,
-    shadowRadius: 12,
-    shadowOffset: { width: 0, height: 5 },
-  },
-  graphSourceNodeTop: {
-    top: 16,
-    left: '34%',
-  },
-  graphSourceNodeRight: {
-    right: 16,
-    top: 92,
-  },
-  graphSourceNodeBottom: {
-    bottom: 16,
-    left: '35%',
-  },
-  graphSourceNodeLeft: {
-    left: 16,
-    top: 96,
-  },
-  graphSourceIcon: {
-    color: '#6c91a8',
-    fontSize: 16,
-  },
-  graphSourceTitle: {
-    color: '#4a4742',
+  thoughtReportKicker: {
+    color: '#e06458',
     fontSize: 11,
-    fontWeight: '800',
-    textAlign: 'center',
-    maxWidth: 96,
+    fontWeight: '900',
   },
-  graphCardBody: {
-    color: '#514d47',
-    fontSize: 14,
-    lineHeight: 21,
+  thoughtReportTitle: {
+    color: '#151311',
+    fontSize: 18,
+    fontWeight: '900',
+    lineHeight: 23,
+  },
+  thoughtReportSummary: {
+    color: '#3c3833',
+    fontSize: 15,
+    lineHeight: 23,
     fontWeight: '600',
   },
-  detailConnectionMap: {
-    height: 180,
-    borderRadius: 24,
+  thoughtReportTimeline: {
+    gap: 8,
+    borderRadius: 20,
     backgroundColor: '#fbfaf7',
-    borderWidth: 1,
-    borderColor: '#eee7df',
-    position: 'relative',
-    overflow: 'hidden',
-    marginTop: 4,
+    padding: 12,
   },
-  detailMapCenter: {
-    position: 'absolute',
-    left: '50%',
-    top: '50%',
-    width: 96,
-    height: 78,
-    marginLeft: -48,
-    marginTop: -39,
-    borderRadius: 28,
-    backgroundColor: '#eff8f2',
-    borderWidth: 1,
-    borderColor: '#cfe8d8',
-    alignItems: 'center',
-    justifyContent: 'center',
-    padding: 10,
+  reportStageRow: {
+    flexDirection: 'row',
+    gap: 10,
+    alignItems: 'flex-start',
+  },
+  reportStageLabel: {
+    width: 36,
+    color: '#e06458',
+    fontSize: 12,
+    fontWeight: '900',
+  },
+  reportStageBody: {
+    flex: 1,
+    color: '#4f4a44',
+    fontSize: 13,
+    lineHeight: 19,
+    fontWeight: '700',
+  },
+  sixWGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+  },
+  sixWChip: {
+    width: '48%',
+    borderRadius: 16,
+    backgroundColor: '#f5f4f2',
+    paddingHorizontal: 10,
+    paddingVertical: 9,
+    gap: 3,
+  },
+  sixWLabel: {
+    color: '#8a8580',
+    fontSize: 10,
+    fontWeight: '900',
+  },
+  sixWValue: {
+    color: '#26231f',
+    fontSize: 12,
+    fontWeight: '800',
+  },
+  nextQuestionCard: {
+    borderRadius: 18,
+    backgroundColor: '#fff3ed',
+    padding: 13,
     gap: 4,
   },
-  detailMapCenterIcon: {
-    fontSize: 18,
-  },
-  detailMapCenterText: {
-    color: '#2b2a26',
+  nextQuestionLabel: {
+    color: '#e06458',
     fontSize: 11,
     fontWeight: '900',
-    textAlign: 'center',
   },
-  detailMapNode: {
-    position: 'absolute',
-    width: 82,
-    minHeight: 46,
-    borderRadius: 20,
-    backgroundColor: '#ffffff',
-    borderWidth: 1,
-    borderColor: '#e2e8e5',
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingHorizontal: 8,
-    gap: 2,
-  },
-  detailMapNodeTop: {
-    top: 13,
-    left: '39%',
-  },
-  detailMapNodeRight: {
-    top: 68,
-    right: 15,
-  },
-  detailMapNodeBottom: {
-    bottom: 13,
-    left: '39%',
-  },
-  detailMapNodeLeft: {
-    top: 68,
-    left: 15,
-  },
-  detailMapNodeIcon: {
+  nextQuestionBody: {
+    color: '#342b26',
     fontSize: 14,
-  },
-  detailMapNodeText: {
-    color: '#55514a',
-    fontSize: 10,
+    lineHeight: 20,
     fontWeight: '800',
-    maxWidth: 68,
+  },
+  reportEvidenceRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  reportEvidenceText: {
+    color: '#8a8580',
+    fontSize: 12,
+    fontWeight: '800',
+  },
+  reportOpenText: {
+    color: '#e06458',
+    fontSize: 13,
+    fontWeight: '900',
+  },
+  readableReportBox: {
+    gap: 12,
   },
   thoughtFlowCard: {
     backgroundColor: '#fffefd',
