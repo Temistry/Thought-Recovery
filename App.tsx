@@ -1784,14 +1784,7 @@ function ThoughtFlowCard({
         <ReportStage label="현재" body={report.currentConclusion} />
       </View>
 
-      <View style={styles.sixWGrid}>
-        {report.sixW.map((item) => (
-          <View key={item.label} style={styles.sixWChip}>
-            <Text style={styles.sixWLabel}>{item.label}</Text>
-            <Text style={styles.sixWValue} numberOfLines={1}>{item.value}</Text>
-          </View>
-        ))}
-      </View>
+      <SixWAnswerPanel items={report.sixW} compact />
 
       <View style={styles.nextQuestionCard}>
         <Text style={styles.nextQuestionLabel}>다음 질문</Text>
@@ -1849,13 +1842,45 @@ function ReadableReportBreakdown({ flow }: { flow: ThoughtFlow }) {
         <ReportStage label="반복" body={report.repeatedConcern} />
         <ReportStage label="현재" body={report.currentConclusion} />
       </View>
-      <View style={styles.sixWGrid}>
-        {report.sixW.map((item) => (
-          <View key={item.label} style={styles.sixWChip}>
-            <Text style={styles.sixWLabel}>{item.label}</Text>
-            <Text style={styles.sixWValue} numberOfLines={1}>{item.value}</Text>
-          </View>
-        ))}
+      <SixWAnswerPanel items={report.sixW} />
+    </View>
+  );
+}
+
+type SixWItem = { label: string; value: string };
+
+function SixWAnswerPanel({ items, compact = false }: { items: SixWItem[]; compact?: boolean }) {
+  const defaultLabel = items.find((item) => item.label === '왜')?.label ?? items[0]?.label ?? '';
+  const [selectedLabel, setSelectedLabel] = useState(defaultLabel);
+  const selected = items.find((item) => item.label === selectedLabel) ?? items[0];
+
+  if (!selected) return null;
+
+  return (
+    <View style={[styles.sixWPanel, compact && styles.sixWPanelCompact]}>
+      <ScrollView
+        horizontal
+        showsHorizontalScrollIndicator={false}
+        contentContainerStyle={styles.sixWTabRow}
+      >
+        {items.map((item) => {
+          const active = item.label === selected.label;
+          return (
+            <Pressable
+              key={item.label}
+              style={[styles.sixWTab, active && styles.sixWTabActive]}
+              onPress={() => setSelectedLabel(item.label)}
+              accessibilityRole="button"
+              accessibilityState={{ selected: active }}
+            >
+              <Text style={[styles.sixWTabText, active && styles.sixWTabTextActive]}>{item.label}</Text>
+            </Pressable>
+          );
+        })}
+      </ScrollView>
+      <View style={[styles.sixWAnswerCard, compact && styles.sixWAnswerCardCompact]}>
+        <Text style={styles.sixWAnswerLabel}>{selected.label}</Text>
+        <Text style={[styles.sixWAnswerValue, compact && styles.sixWAnswerValueCompact]}>{selected.value}</Text>
       </View>
     </View>
   );
@@ -2975,7 +3000,7 @@ function buildFallbackMergedThoughtDraft(
     title,
     body:
       `## 핵심 발견\n${firstInsight} 이 흐름은 ${sharedProblem}이라는 문제를 중심으로 다시 읽을 수 있다. 같은 문장을 반복하는 대신, 원문마다 드러난 표현과 맥락을 기준으로 생각의 방향을 좁혀야 한다.\n\n` +
-      `## 개떡같이 말한 부분을 구체화하면\n흩어진 메모를 그대로 두면 모호하지만, ${concreteAngle}라는 판단축으로 묶으면 사용자가 실제로 정하려는 대상이 조금 더 분명해진다. 이 초안은 결론을 대신 확정하기보다, 어떤 빈칸을 채우면 생각이 행동 가능한 문장으로 바뀌는지 보여준다.\n\n` +
+      `## 모호했던 표현을 구체화하면\n흩어진 메모를 그대로 두면 모호하지만, ${concreteAngle}라는 판단축으로 묶으면 사용자가 실제로 정하려는 대상이 조금 더 분명해진다. 이 초안은 결론을 대신 확정하기보다, 어떤 빈칸을 채우면 생각이 행동 가능한 문장으로 바뀌는지 보여준다.\n\n` +
       `## 생각의 변화\n처음에는 ${firstInsight}에서 출발했다. 이후 메모들이 더해지면서 ${evidenceText} 같은 조각이 보조 근거가 됐다. 지금은 이 조각들을 하나의 결론으로 몰아가기보다, 반복된 문제와 아직 덜 정해진 선택지를 분리해서 보는 단계다.\n\n` +
       `## 다음에 이어볼 질문\n${makeLocalFallbackNextQuestion(sourceInsights, title)}`,
     judgmentSummary: [sharedProblem, `${concreteAngle} 관점에서 빈칸을 더 구체화할 필요가 있다.`],
@@ -5567,28 +5592,64 @@ const styles = StyleSheet.create({
     lineHeight: 19,
     fontWeight: '700',
   },
-  sixWGrid: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 8,
+  sixWPanel: {
+    borderRadius: 22,
+    backgroundColor: '#fbfaf7',
+    padding: 12,
+    gap: 10,
   },
-  sixWChip: {
-    width: '48%',
-    borderRadius: 16,
-    backgroundColor: '#f5f4f2',
-    paddingHorizontal: 10,
-    paddingVertical: 9,
-    gap: 3,
+  sixWPanelCompact: {
+    padding: 10,
+    borderRadius: 20,
   },
-  sixWLabel: {
-    color: '#8a8580',
-    fontSize: 10,
+  sixWTabRow: {
+    gap: 7,
+    paddingRight: 4,
+  },
+  sixWTab: {
+    borderRadius: 999,
+    backgroundColor: '#f0eeeb',
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+  },
+  sixWTabActive: {
+    backgroundColor: '#26231f',
+  },
+  sixWTabText: {
+    color: '#827a72',
+    fontSize: 12,
     fontWeight: '900',
   },
-  sixWValue: {
+  sixWTabTextActive: {
+    color: '#fffaf4',
+  },
+  sixWAnswerCard: {
+    borderRadius: 18,
+    backgroundColor: '#ffffff',
+    borderWidth: 1,
+    borderColor: '#eee9e3',
+    paddingHorizontal: 14,
+    paddingVertical: 13,
+    gap: 5,
+  },
+  sixWAnswerCardCompact: {
+    paddingHorizontal: 12,
+    paddingVertical: 11,
+  },
+  sixWAnswerLabel: {
+    color: '#e06458',
+    fontSize: 11,
+    fontWeight: '900',
+  },
+  sixWAnswerValue: {
     color: '#26231f',
-    fontSize: 12,
+    fontSize: 15,
+    lineHeight: 22,
     fontWeight: '800',
+  },
+  sixWAnswerValueCompact: {
+    fontSize: 13,
+    lineHeight: 19,
   },
   nextQuestionCard: {
     borderRadius: 18,
