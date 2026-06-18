@@ -930,6 +930,7 @@ export default function App() {
   }
 
   function changeTab(nextTab: AppTab) {
+    if (nextTab !== activeTab) void Haptics.selectionAsync().catch(() => undefined);
     setActiveTab(nextTab);
     setSelectedNoteId(null);
     if (nextTab !== 'today') {
@@ -1096,8 +1097,7 @@ export default function App() {
   function renderToday() {
     const todayNotes = activityNotes.filter((note) => isSameLocalDay(note.created_at, new Date()));
     const thoughtFeedNotes = todayNotes.slice(0, 4);
-    const todayStoredCount = todayNotes.length;
-    const processingCount = todayNotes.filter((note) => isProcessingVoiceNote(note, voiceJobs[note.id])).length;
+    const newThoughtFlows = visibleThoughtFlows.filter((flow) => flow.notes.some((note) => isSameLocalDay(note.created_at, new Date())));
 
     return (
       <ScrollView contentContainerStyle={styles.scrollContent}>
@@ -1115,11 +1115,20 @@ export default function App() {
           maxRecordingMs={MAX_RECORDING_MS}
           onToggleRecording={recording ? stopRecording : startRecording}
         />
-        <View style={styles.todaySignalGrid}>
-          <TodaySignalCard icon="✓" label="저장됨" value={todayStoredCount} tone="mint" onPress={() => changeTab('archive')} />
-          <TodaySignalCard icon="↔" label="연결 중" value={processingCount} tone="blue" onPress={() => changeTab('archive')} />
-          <TodaySignalCard icon="🌱" label="자라남" value={visibleThoughtFlows.length} tone="peach" onPress={() => changeTab('organized')} />
-        </View>
+        {newThoughtFlows.length ? (
+          <SpringPressable
+            style={styles.newThoughtReportCta}
+            onPress={() => openThoughtFlow(newThoughtFlows[0])}
+            accessibilityLabel="새로 자라난 생각 보기"
+          >
+            <View style={styles.newThoughtReportIcon}><Text style={styles.newThoughtReportIconText}>🌱</Text></View>
+            <View style={styles.newThoughtReportTextWrap}>
+              <Text style={styles.newThoughtReportTitle}>새로 자라난 생각 보기</Text>
+              <Text style={styles.newThoughtReportHint}>{newThoughtFlows.length}개의 생각 리포트가 새로 생겼어요</Text>
+            </View>
+            <Text style={styles.newThoughtReportArrow}>›</Text>
+          </SpringPressable>
+        ) : null}
 
         <View style={styles.retrievalSection}>
           <View style={styles.retrievalSectionHeader}>
@@ -1211,21 +1220,25 @@ export default function App() {
   }
 
   function openNote(note: Note) {
+    void Haptics.selectionAsync().catch(() => undefined);
     setSelectedNoteOverride(notes.some((item) => item.id === note.id) ? null : note);
     setSelectedNoteId(note.id);
   }
 
   function openThoughtFlow(flow: ThoughtFlow) {
+    void Haptics.selectionAsync().catch(() => undefined);
     setSelectedNoteId(null);
     setSelectedNoteOverride(null);
     setSelectedThoughtFlowId(flow.id);
   }
 
   function closeThoughtFlowDetail() {
+    void Haptics.selectionAsync().catch(() => undefined);
     setSelectedThoughtFlowId(null);
   }
 
   function closeNoteDetail() {
+    void Haptics.selectionAsync().catch(() => undefined);
     setSelectedNoteId(null);
     setSelectedNoteOverride(null);
   }
@@ -1241,13 +1254,13 @@ export default function App() {
           <Text style={styles.archiveDateCount}>{group.notes.length}개</Text>
         </View>
         {group.notes.map((note) => (
-          <NoteCard
+          <SwipeableArchiveNoteCard
             key={note.id}
             note={note}
             voiceJob={voiceJobs[note.id]}
-            relatedCount={0}
-            onPress={() => openNote(note)}
+            onOpen={() => openNote(note)}
             onRetryVoice={() => retryVoiceTranscription(note)}
+            onTrash={() => moveNoteToTrash(note)}
           />
         ))}
       </View>
@@ -1264,12 +1277,12 @@ export default function App() {
         contentContainerStyle={styles.noteList}
         ListEmptyComponent={<Text style={styles.empty}>{emptyText}</Text>}
         renderItem={({ item }) => (
-          <NoteCard
+          <SwipeableArchiveNoteCard
             note={item}
             voiceJob={voiceJobs[item.id]}
-            relatedCount={0}
-            onPress={() => openNote(item)}
+            onOpen={() => openNote(item)}
             onRetryVoice={() => retryVoiceTranscription(item)}
+            onTrash={() => moveNoteToTrash(item)}
           />
         )}
       />
@@ -1567,13 +1580,19 @@ function AppTopBar({
   onLeftPress?: () => void;
   onRightPress?: () => void;
 }) {
+  function press(action?: () => void) {
+    if (!action) return;
+    void Haptics.selectionAsync().catch(() => undefined);
+    action();
+  }
+
   return (
     <View style={styles.appTopBar}>
-      <Pressable style={styles.topIconButton} onPress={onLeftPress} disabled={!onLeftPress} hitSlop={10}>
+      <Pressable style={styles.topIconButton} onPress={() => press(onLeftPress)} disabled={!onLeftPress} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
         <Text style={styles.topIconText}>{leftIcon ?? ''}</Text>
       </Pressable>
       <Text style={styles.appTopTitle}>{title}</Text>
-      <Pressable style={styles.topIconButton} onPress={onRightPress} disabled={!onRightPress} hitSlop={10}>
+      <Pressable style={styles.topIconButton} onPress={() => press(onRightPress)} disabled={!onRightPress} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
         <Text style={styles.topIconText}>{rightIcon ?? ''}</Text>
       </Pressable>
     </View>
@@ -1616,31 +1635,6 @@ function SpringPressable({
     >
       {children}
     </AnimatedPressable>
-  );
-}
-
-function TodaySignalCard({
-  icon,
-  label,
-  value,
-  tone,
-  onPress,
-}: {
-  icon: string;
-  label: string;
-  value: number;
-  tone: 'mint' | 'blue' | 'peach';
-  onPress: () => void;
-}) {
-  const cardToneStyle = tone === 'mint' ? styles.todaySignalCardMint : tone === 'blue' ? styles.todaySignalCardBlue : styles.todaySignalCardPeach;
-  const iconToneStyle = tone === 'mint' ? styles.todaySignalIconMint : tone === 'blue' ? styles.todaySignalIconBlue : styles.todaySignalIconPeach;
-
-  return (
-    <SpringPressable style={[styles.todaySignalCard, cardToneStyle]} onPress={onPress} accessibilityLabel={`${label} ${value}개`}>
-      <Text style={[styles.todaySignalIcon, iconToneStyle]}>{icon}</Text>
-      <Text style={styles.todaySignalLabel}>{label}</Text>
-      <Text style={styles.todaySignalValue}>{value}</Text>
-    </SpringPressable>
   );
 }
 
@@ -1711,7 +1705,11 @@ function BottomTabs({ activeTab, onChange }: { activeTab: AppTab; onChange: (tab
       {tabs.map((tab) => {
         const isActive = activeTab === tab.id;
         return (
-          <Pressable key={tab.id} style={[styles.tabButton, isActive && styles.tabButtonActive]} onPress={() => onChange(tab.id)}>
+          <Pressable
+            key={tab.id}
+            style={[styles.tabButton, isActive && styles.tabButtonActive]}
+            onPress={() => onChange(tab.id)}
+          >
             <Text style={[styles.tabIcon, isActive && styles.tabTextActive]}>{tab.icon}</Text>
             <Text style={[styles.tabLabel, isActive && styles.tabTextActive]}>{tab.label}</Text>
           </Pressable>
@@ -1775,6 +1773,87 @@ function NoteCard({
         </View>
       ) : null}
     </Pressable>
+  );
+}
+
+function SwipeableArchiveNoteCard({
+  note,
+  voiceJob,
+  onOpen,
+  onRetryVoice,
+  onTrash,
+}: {
+  note: Note;
+  voiceJob?: VoiceJob;
+  onOpen: () => void;
+  onRetryVoice: () => void;
+  onTrash: () => void;
+}) {
+  const translateX = useRef(new Animated.Value(0)).current;
+  const [swiping, setSwiping] = useState(false);
+  const thresholdHapticRef = useRef(false);
+
+  const reset = useCallback(() => {
+    thresholdHapticRef.current = false;
+    setSwiping(false);
+    Animated.spring(translateX, { toValue: 0, friction: 8, tension: 150, useNativeDriver: true }).start();
+  }, [translateX]);
+
+  const commitTrash = useCallback(() => {
+    void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => undefined);
+    Animated.timing(translateX, { toValue: -SCREEN_WIDTH, duration: 160, useNativeDriver: true }).start(() => {
+      onTrash();
+      translateX.setValue(0);
+      setSwiping(false);
+      thresholdHapticRef.current = false;
+    });
+  }, [onTrash, translateX]);
+
+  const responder = useMemo(
+    () => PanResponder.create({
+      onStartShouldSetPanResponder: () => false,
+      onMoveShouldSetPanResponder: (_event, gesture) => gesture.dx < -6 && Math.abs(gesture.dx) > Math.abs(gesture.dy) * 1.15,
+      onMoveShouldSetPanResponderCapture: (_event, gesture) => gesture.dx < -8 && Math.abs(gesture.dx) > Math.abs(gesture.dy) * 1.2,
+      onPanResponderGrant: () => {
+        setSwiping(true);
+        thresholdHapticRef.current = false;
+        translateX.stopAnimation();
+      },
+      onPanResponderMove: (_event, gesture) => {
+        const raw = Math.min(0, gesture.dx);
+        const resisted = raw > -120 ? raw : -120 + (raw + 120) * 0.36;
+        translateX.setValue(resisted);
+        const kineticDistance = Math.abs(raw) + Math.max(0, Math.abs(gesture.vx)) * 90;
+        if (!thresholdHapticRef.current && kineticDistance > SCREEN_WIDTH * 0.42) {
+          thresholdHapticRef.current = true;
+          void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium).catch(() => undefined);
+        }
+      },
+      onPanResponderRelease: (_event, gesture) => {
+        const kineticDistance = Math.abs(Math.min(0, gesture.dx)) + Math.max(0, -gesture.vx) * 120;
+        if (gesture.dx < -SCREEN_WIDTH * 0.38 || kineticDistance > SCREEN_WIDTH * 0.5) commitTrash();
+        else reset();
+      },
+      onPanResponderTerminate: reset,
+    }),
+    [commitTrash, reset, translateX],
+  );
+
+  return (
+    <View style={styles.swipeArchiveShell}>
+      <View style={[styles.swipeTrashReveal, swiping && styles.swipeTrashRevealActive]} pointerEvents="none">
+        <Text style={styles.swipeTrashIcon}>🗑</Text>
+      </View>
+      <Animated.View style={{ transform: [{ translateX }] }} {...responder.panHandlers}>
+        <NoteCard
+          note={note}
+          voiceJob={voiceJob}
+          relatedCount={0}
+          onPress={onOpen}
+          onRetryVoice={onRetryVoice}
+        />
+      </Animated.View>
+    </View>
   );
 }
 
@@ -1954,9 +2033,14 @@ function SixWAnswerPanel({ items, compact = false }: { items: SixWItem[]; compac
 
 
 function AppBackButton({ label, onPress, style }: { label: string; onPress: () => void; style?: any }) {
+  function press() {
+    void Haptics.selectionAsync().catch(() => undefined);
+    onPress();
+  }
+
   return (
-    <Pressable style={[styles.backButton, style]} onPress={onPress} hitSlop={18}>
-      <View style={styles.backButtonInner}>
+    <Pressable style={[styles.backButton, style]} onPress={press} hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}>
+      <View style={styles.backButtonInner} pointerEvents="none">
         <Text style={styles.backChevron}>{'‹'}</Text>
         <Text style={styles.backButtonText} numberOfLines={1}>{label}</Text>
       </View>
@@ -1967,6 +2051,7 @@ function AppBackButton({ label, onPress, style }: { label: string; onPress: () =
 function useSwipeBack(onBack: () => void) {
   const translateX = useRef(new Animated.Value(0)).current;
   const progress = useRef(new Animated.Value(0)).current;
+  const hapticTriggeredRef = useRef(false);
 
   const restore = useCallback(() => {
     Animated.parallel([
@@ -1976,6 +2061,7 @@ function useSwipeBack(onBack: () => void) {
   }, [progress, translateX]);
 
   const settleBack = useCallback(() => {
+    void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => undefined);
     Animated.parallel([
       Animated.spring(translateX, { toValue: SCREEN_WIDTH, friction: 10, tension: 90, useNativeDriver: true }),
       Animated.timing(progress, { toValue: 1, duration: 120, useNativeDriver: true }),
@@ -1985,14 +2071,25 @@ function useSwipeBack(onBack: () => void) {
   const responder = useMemo(
     () => PanResponder.create({
       onStartShouldSetPanResponder: () => false,
-      onMoveShouldSetPanResponder: (_event, gesture) => gesture.dx > 6 && Math.abs(gesture.dx) > Math.abs(gesture.dy) * 1.15,
-      onMoveShouldSetPanResponderCapture: (_event, gesture) => gesture.dx > 8 && Math.abs(gesture.dx) > Math.abs(gesture.dy) * 1.2,
+      onMoveShouldSetPanResponder: (event, gesture) => {
+        const startX = event.nativeEvent.pageX - gesture.dx;
+        return startX <= SCREEN_WIDTH * 0.56 && gesture.dx > 6 && Math.abs(gesture.dx) > Math.abs(gesture.dy) * 1.15;
+      },
+      onMoveShouldSetPanResponderCapture: (event, gesture) => {
+        const startX = event.nativeEvent.pageX - gesture.dx;
+        return startX <= SCREEN_WIDTH * 0.56 && gesture.dx > 8 && Math.abs(gesture.dx) > Math.abs(gesture.dy) * 1.2;
+      },
       onPanResponderGrant: () => {
+        hapticTriggeredRef.current = false;
         translateX.stopAnimation();
         progress.stopAnimation();
       },
       onPanResponderMove: (_event, gesture) => {
         const raw = Math.max(0, gesture.dx);
+        if (!hapticTriggeredRef.current && (raw > 86 || gesture.vx > 0.42)) {
+          hapticTriggeredRef.current = true;
+          void Haptics.selectionAsync().catch(() => undefined);
+        }
         const resisted = raw < 90 ? raw : 90 + (raw - 90) * 0.58;
         translateX.setValue(resisted);
         progress.setValue(Math.min(1, raw / 180));
@@ -2075,8 +2172,7 @@ function ThoughtFlowDetailScreen({
   }
 
   return (
-    <Animated.View style={[styles.detailShell, swipeBack.animatedStyle]}>
-      <View pointerEvents="box-only" style={styles.edgeSwipeZone} {...swipeBack.responder.panHandlers} />
+    <Animated.View style={[styles.detailShell, swipeBack.animatedStyle]} {...swipeBack.responder.panHandlers}>
       <View style={styles.detailFixedTopBar}>
         <AppBackButton label="생각" onPress={onBack} />
         <Text style={styles.flowDetailStatus}>{statusLabel}</Text>
@@ -2381,8 +2477,7 @@ function NoteDetail({
 
 
   return (
-    <Animated.View style={[styles.detailShell, swipeBack.animatedStyle]}>
-      <View pointerEvents="box-only" style={styles.edgeSwipeZone} {...swipeBack.responder.panHandlers} />
+    <Animated.View style={[styles.detailShell, swipeBack.animatedStyle]} {...swipeBack.responder.panHandlers}>
       <View style={styles.detailFixedTopBar}>
         <AppBackButton label="목록" onPress={onBack} />
         <View style={styles.detailActionRow}>
@@ -4144,54 +4239,48 @@ const styles = StyleSheet.create({
     fontSize: 15,
     fontWeight: '900',
   },
-  todaySignalGrid: {
-    flexDirection: 'row',
-    gap: 10,
-  },
-  todaySignalCard: {
-    flex: 1,
-    minHeight: 82,
+  newThoughtReportCta: {
+    minHeight: 74,
     borderRadius: 18,
+    paddingHorizontal: 14,
     paddingVertical: 12,
+    flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'center',
-    gap: 4,
+    gap: 12,
+    backgroundColor: '#fff3ed',
+    borderColor: '#ffd9cb',
     borderWidth: 1,
   },
-  todaySignalCardMint: {
-    backgroundColor: '#eff9f3',
-    borderColor: '#d7eee0',
+  newThoughtReportIcon: {
+    width: 42,
+    height: 42,
+    borderRadius: 21,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#ffffff',
   },
-  todaySignalCardBlue: {
-    backgroundColor: '#f0f5ff',
-    borderColor: '#dae7ff',
+  newThoughtReportIconText: {
+    fontSize: 20,
   },
-  todaySignalCardPeach: {
-    backgroundColor: '#fff3ed',
-    borderColor: '#ffe0d4',
+  newThoughtReportTextWrap: {
+    flex: 1,
+    minWidth: 0,
+    gap: 3,
   },
-  todaySignalIcon: {
-    fontSize: 17,
-    fontWeight: '900',
-  },
-  todaySignalIconMint: {
-    color: '#5dbb8a',
-  },
-  todaySignalIconBlue: {
-    color: '#5d82c8',
-  },
-  todaySignalIconPeach: {
-    color: '#e56d4f',
-  },
-  todaySignalLabel: {
-    color: '#7b746d',
-    fontSize: 12,
-    fontWeight: '800',
-  },
-  todaySignalValue: {
+  newThoughtReportTitle: {
     color: '#171412',
-    fontSize: 15,
+    fontSize: 16,
     fontWeight: '900',
+  },
+  newThoughtReportHint: {
+    color: '#8a7568',
+    fontSize: 12,
+    fontWeight: '700',
+  },
+  newThoughtReportArrow: {
+    color: '#e56d4f',
+    fontSize: 28,
+    fontWeight: '800',
   },
   todayRecorderSubtitle: {
     color: '#d7c7b6',
@@ -4421,6 +4510,25 @@ const styles = StyleSheet.create({
     color: '#7a746b',
     textAlign: 'center',
     marginTop: 30,
+  },
+  swipeArchiveShell: {
+    position: 'relative',
+    overflow: 'hidden',
+    borderRadius: 18,
+  },
+  swipeTrashReveal: {
+    ...StyleSheet.absoluteFillObject,
+    alignItems: 'flex-end',
+    justifyContent: 'center',
+    paddingRight: 24,
+    backgroundColor: '#fff0ec',
+    opacity: 0.72,
+  },
+  swipeTrashRevealActive: {
+    opacity: 1,
+  },
+  swipeTrashIcon: {
+    fontSize: 24,
   },
   noteCard: {
     backgroundColor: '#ffffff',
@@ -4736,16 +4844,6 @@ const styles = StyleSheet.create({
     zIndex: 2,
     elevation: 2,
     backgroundColor: '#fbfaf7',
-  },
-  edgeSwipeZone: {
-    position: 'absolute',
-    left: 0,
-    top: 0,
-    bottom: 0,
-    width: 42,
-    zIndex: 100,
-    elevation: 100,
-    backgroundColor: 'transparent',
   },
   detailFixedTopBar: {
     flexDirection: 'row',
