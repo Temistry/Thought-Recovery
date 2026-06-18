@@ -70,6 +70,7 @@ type ThoughtProfile = {
 };
 type NoteMeaning = ThoughtProfile;
 type ConnectionScore = {
+  semanticScore: number;
   keywordScore: number;
   intentScore: number;
   problemScore: number;
@@ -78,6 +79,10 @@ type ConnectionScore = {
   recencyContextScore: number;
   userFeedbackScore: number;
   total: number;
+};
+type ConnectionCorpusContext = {
+  documentCount: number;
+  documentFrequency: Map<string, number>;
 };
 type RelatedCandidate = {
   note: Note;
@@ -2890,19 +2895,15 @@ function stableHash(value: string) {
   return (hash >>> 0).toString(36);
 }
 
-function pickCohesiveFlowNotes(seed: Note, candidates: Note[], limit = 8) {
-  const seedMeaning = inferMeaning(seed);
+function pickCohesiveFlowNotes(seed: Note, candidates: Note[], limit = 8, context = buildConnectionCorpusContext(candidates)) {
   return candidates
     .map((note) => {
-      const meaning = inferMeaning(note);
-      const overlap = keywordOverlap(seedMeaning, meaning);
-      const sameProblem = seedMeaning.problem && seedMeaning.problem === meaning.problem ? 3 : 0;
-      const sameIntent = seedMeaning.intent && seedMeaning.intent === meaning.intent ? 2 : 0;
-      const sharedWords = sharedWordScore(seed, note);
+      if (note.id === seed.id) return { note, score: 99 };
+      const scored = scoreRelatedNote(seed, note, {}, context);
       const lowSignalPenalty = isLowSignalThoughtNote(note) ? -10 : 0;
-      return { note, score: overlap + sameProblem + sameIntent + sharedWords + lowSignalPenalty };
+      return { note, score: scored.score + lowSignalPenalty };
     })
-    .filter((item) => item.score >= 3)
+    .filter((item) => item.note.id === seed.id || item.score >= 3.4)
     .sort((a, b) => b.score - a.score)
     .slice(0, limit)
     .map((item) => item.note);
@@ -2951,10 +2952,11 @@ function buildRetrievalSections(notes: Note[], feedback: RetrievalFeedbackMap) {
     return picked;
   };
 
-  const thoughtFlows = buildThoughtFlows(visible, feedback);
+  const connectionContext = buildConnectionCorpusContext(visible);
+  const thoughtFlows = buildThoughtFlows(visible, feedback, connectionContext);
 
   const relatedToLatest = latest
-    ? retrieveCandidates(latest, visible, feedback)
+    ? retrieveCandidates(latest, visible, feedback, connectionContext)
         .filter((item) => item.note.id !== latest.id)
         .map((item) => {
           const latestTitle = latest.ai_title || makeDraftTitle(latest.raw_text);
@@ -2973,7 +2975,7 @@ function buildRetrievalSections(notes: Note[], feedback: RetrievalFeedbackMap) {
 
   const topicRepeated = visible
     .map((note) => {
-      const related = retrieveCandidates(note, visible, feedback).filter((item) => item.note.id !== note.id);
+      const related = retrieveCandidates(note, visible, feedback, connectionContext).filter((item) => item.note.id !== note.id);
       return { note, relatedCount: related.length, topRelated: related[0]?.note };
     })
     .filter((item) => item.relatedCount > 0)
@@ -3022,43 +3024,32 @@ function buildRetrievalSections(notes: Note[], feedback: RetrievalFeedbackMap) {
   };
 }
 
-function buildThoughtFlows(notes: Note[], feedback: RetrievalFeedbackMap): ThoughtFlow[] {
+function buildThoughtFlows(notes: Note[], feedback: RetrievalFeedbackMap, existingContext?: ConnectionCorpusContext): ThoughtFlow[] {
   const visible = notes.filter((note) => feedback[note.id]?.status !== 'hidden' && !isLowSignalThoughtNote(note));
-  const groups = new Map<string, Note[]>();
-
-  for (const note of visible) {
-    const profile = inferMeaning(note);
-    const keys = [profile.problem, profile.intent, profile.decisionAxis, profile.reusePurpose]
-      .map((key) => key.trim())
-      .filter(isMeaningfulThoughtFlowKey);
-    for (const key of keys) {
-      const current = groups.get(key) ?? [];
-      current.push(note);
-      groups.set(key, current);
-    }
-  }
-
+  const context = existingContext ?? buildConnectionCorpusContext(visible);
+  const clusters = buildMechanicalNoteClusters(visible, feedback, context);
   const flows: ThoughtFlow[] = [];
-  for (const [key, group] of groups) {
-    const unique = Array.from(new Map(group.map((note) => [note.id, note])).values());
-    if (unique.length < 2) continue;
-    const seed = [...unique].sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())[0];
-    const cohesiveNotes = pickCohesiveFlowNotes(seed, unique, 5);
+
+  for (const cluster of clusters) {
+    if (cluster.notes.length < 2) continue;
+    const seed = [...cluster.notes].sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())[0];
+    const cohesiveNotes = pickCohesiveFlowNotes(seed, cluster.notes, 5, context);
     if (cohesiveNotes.length < 2) continue;
     const ranked = cohesiveNotes
       .map((note) => ({ note, profile: inferMeaning(note) }))
       .sort((a, b) => new Date(b.note.created_at).getTime() - new Date(a.note.created_at).getTime())
       .slice(0, 5);
     const profiles = ranked.map((item) => item.profile);
-    const sharedProblem = mostCommon(profiles.map((profile) => profile.problem).filter(isMeaningfulThoughtFlowKey)) || key;
-    const sharedIntent = mostCommon(profiles.map((profile) => profile.intent).filter(isMeaningfulThoughtFlowKey)) || key;
-    const sharedDecisionAxis = mostCommon(profiles.map((profile) => profile.decisionAxis).filter(isMeaningfulThoughtFlowKey)) || key;
+    const sharedProblem = mostCommon(profiles.map((profile) => profile.problem).filter(isMeaningfulThoughtFlowKey)) || cluster.sharedTerms[0] || '서로 이어지는 생각';
+    const sharedIntent = mostCommon(profiles.map((profile) => profile.intent).filter(isMeaningfulThoughtFlowKey)) || sharedProblem;
+    const sharedDecisionAxis = mostCommon(profiles.map((profile) => profile.decisionAxis).filter(isMeaningfulThoughtFlowKey)) || sharedProblem;
     const flowTitle = makeFlowTitle(sharedProblem, sharedDecisionAxis);
     if (isGenericThoughtFlowKey(flowTitle)) continue;
-    const confidenceScore = Math.min(0.95, 0.45 + ranked.length * 0.1 + (sharedProblem === key ? 0.1 : 0));
+    const confidenceScore = Math.min(0.95, 0.42 + ranked.length * 0.08 + cluster.averageScore * 0.04);
     const now = new Date().toISOString();
     const noteIds = ranked.map((item) => item.note.id);
     const sourceNotes = ranked.map((item) => item.note);
+    const sharedTermsText = cluster.sharedTerms.length ? ` (${cluster.sharedTerms.slice(0, 4).join(', ')})` : '';
     flows.push({
       id: `flow-${slugifyFlowId(flowTitle)}-${noteIds.join('-')}`,
       status: 'temporary',
@@ -3069,9 +3060,9 @@ function buildThoughtFlows(notes: Note[], feedback: RetrievalFeedbackMap): Thoug
       sharedProblem,
       sharedIntent,
       sharedDecisionAxis,
-      synthesis: `이 흐름은 따로 남긴 생각들이 사실 ‘${sharedProblem}’라는 같은 문제를 반복해서 바라보고 있었다는 신호예요. 원태님은 이 문제를 감각이 아니라 ‘${sharedDecisionAxis}’로 다루려 하고 있어요.`,
-      whyNow: `최근 생각과 과거 생각이 같은 문제와 의도를 공유해서, 지금 보면 “내가 계속 이 문제를 보고 있었구나”를 확인할 수 있어요.`,
-      nextQuestion: `이 흐름을 지금 결정이나 v0.1 설명에 어떻게 써먹을 수 있을까?`,
+      synthesis: `이 흐름은 서로 코사인 유사도가 높은 메모들이 같은 클러스터로 묶인 결과예요${sharedTermsText}. 중심 문제는 ‘${sharedProblem}’로 읽을 수 있어요.`,
+      whyNow: `최근 메모와 과거 메모가 의미 벡터상 같은 군집에 들어와서, 지금 함께 보면 반복되는 생각의 방향을 확인할 수 있어요.`,
+      nextQuestion: `이 연결된 메모들을 하나의 판단이나 다음 행동으로 줄이면 무엇이 남을까?`,
       createdAt: ranked[ranked.length - 1]?.note.created_at ?? now,
       updatedAt: ranked[0]?.note.updated_at ?? ranked[0]?.note.created_at ?? now,
       confidenceScore,
@@ -3098,6 +3089,66 @@ function buildThoughtFlows(notes: Note[], feedback: RetrievalFeedbackMap): Thoug
   }
 
   return dedupedFlows;
+}
+
+function buildMechanicalNoteClusters(notes: Note[], feedback: RetrievalFeedbackMap, context: ConnectionCorpusContext) {
+  const neighbors = new Map<string, RelatedCandidate[]>();
+  const byId = new Map(notes.map((note) => [note.id, note]));
+
+  for (let leftIndex = 0; leftIndex < notes.length; leftIndex += 1) {
+    for (let rightIndex = leftIndex + 1; rightIndex < notes.length; rightIndex += 1) {
+      const left = notes[leftIndex];
+      const right = notes[rightIndex];
+      const scoredRight = scoreRelatedNote(left, right, feedback, context);
+      if (!isStrongRelatedCandidate(scoredRight)) continue;
+      const scoredLeft = scoreRelatedNote(right, left, feedback, context);
+      neighbors.set(left.id, [...(neighbors.get(left.id) ?? []), scoredRight]);
+      neighbors.set(right.id, [...(neighbors.get(right.id) ?? []), scoredLeft]);
+    }
+  }
+
+  const visited = new Set<string>();
+  const clusters: Array<{ notes: Note[]; averageScore: number; sharedTerms: string[] }> = [];
+
+  for (const note of notes) {
+    if (visited.has(note.id)) continue;
+    const queue = [note.id];
+    const componentIds: string[] = [];
+    const componentScores: number[] = [];
+    visited.add(note.id);
+
+    while (queue.length) {
+      const id = queue.shift()!;
+      componentIds.push(id);
+      for (const edge of neighbors.get(id) ?? []) {
+        componentScores.push(edge.score);
+        if (!visited.has(edge.note.id)) {
+          visited.add(edge.note.id);
+          queue.push(edge.note.id);
+        }
+      }
+    }
+
+    if (componentIds.length < 2) continue;
+    const componentNotes = componentIds.map((id) => byId.get(id)).filter((item): item is Note => !!item);
+    const sharedTerms = mostCommonConnectionTerms(componentNotes, context);
+    const averageScore = componentScores.length ? componentScores.reduce((sum, value) => sum + value, 0) / componentScores.length : 0;
+    clusters.push({ notes: componentNotes, averageScore, sharedTerms });
+  }
+
+  return clusters.sort((a, b) => b.averageScore - a.averageScore || b.notes.length - a.notes.length);
+}
+
+function mostCommonConnectionTerms(notes: Note[], context: ConnectionCorpusContext) {
+  const counts = new Map<string, number>();
+  for (const note of notes) {
+    for (const term of buildConnectionVector(note, context).keys()) counts.set(term, (counts.get(term) ?? 0) + 1);
+  }
+  return Array.from(counts.entries())
+    .filter(([, count]) => count >= 2)
+    .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+    .map(([term]) => term)
+    .slice(0, 8);
 }
 
 function buildPinnedPlanningThoughtFlow(notes: Note[]): ThoughtFlow {
@@ -3383,27 +3434,17 @@ function makeUseSuggestion(note: Note) {
   return '지금의 생각과 연결해 다음 판단의 재료로 쓸 수 있습니다.';
 }
 
-function retrieveCandidates(note: Note, notes: Note[], feedback: RetrievalFeedbackMap) {
-  const byId = new Map<string, RelatedCandidate>();
-  const noteMeaning = inferMeaning(note);
-  const routes = [
-    (candidate: Note) => keywordOverlap(noteMeaning, inferMeaning(candidate)) >= 2,
-    (candidate: Note) => sameMeaningfulConnectionValue(inferMeaning(candidate).intent, noteMeaning.intent),
-    (candidate: Note) => sameMeaningfulConnectionValue(inferMeaning(candidate).problem, noteMeaning.problem),
-    (candidate: Note) => sameMeaningfulConnectionValue(inferMeaning(candidate).reusePurpose, noteMeaning.reusePurpose),
-    (candidate: Note) => sameMeaningfulConnectionValue(inferMeaning(candidate).decisionAxis, noteMeaning.decisionAxis),
-    (candidate: Note) => feedback[candidate.id]?.status === 'useful',
-  ];
+function retrieveCandidates(note: Note, notes: Note[], feedback: RetrievalFeedbackMap, existingContext?: ConnectionCorpusContext) {
+  const context = existingContext ?? buildConnectionCorpusContext(notes);
+  const candidates: RelatedCandidate[] = [];
 
   for (const candidate of notes) {
     if (candidate.id === note.id || feedback[candidate.id]?.status === 'hidden') continue;
-    if (routes.some((route) => route(candidate))) {
-      byId.set(candidate.id, scoreRelatedNote(note, candidate, feedback));
-    }
+    const scored = scoreRelatedNote(note, candidate, feedback, context);
+    if (isStrongRelatedCandidate(scored)) candidates.push(scored);
   }
 
-  return Array.from(byId.values())
-    .filter((item) => item.score > 0)
+  return candidates
     .sort((a, b) => b.score - a.score)
     .slice(0, 20);
 }
@@ -3412,33 +3453,40 @@ function rankRelatedNotes(note: Note, notes: Note[]) {
   return retrieveCandidates(note, notes, {});
 }
 
-function scoreRelatedNote(source: Note, candidate: Note, feedback: RetrievalFeedbackMap = {}): RelatedCandidate {
+function scoreRelatedNote(source: Note, candidate: Note, feedback: RetrievalFeedbackMap = {}, context?: ConnectionCorpusContext): RelatedCandidate {
+  const corpus = context ?? buildConnectionCorpusContext([source, candidate]);
   const sourceMeaning = inferMeaning(source);
   const candidateMeaning = inferMeaning(candidate);
+  const sourceVector = buildConnectionVector(source, corpus);
+  const candidateVector = buildConnectionVector(candidate, corpus);
+  const sharedTerms = sharedConnectionTerms(sourceVector, candidateVector).slice(0, 5);
   const reasons: string[] = [];
+  const semanticSimilarity = cosineConnectionSimilarity(sourceVector, candidateVector);
+  const semanticScore = Math.round(semanticSimilarity * 100) / 100;
   const sharedKeywords = candidateMeaning.keywords.filter((keyword) => sourceMeaning.keywords.includes(keyword));
-  const keywordScore = sharedKeywords.length >= 2 ? Math.min(2, sharedKeywords.length * 0.5) : 0;
-  const intentScore = sameMeaningfulConnectionValue(sourceMeaning.intent, candidateMeaning.intent) ? 4 : 0;
-  const problemScore = sameMeaningfulConnectionValue(sourceMeaning.problem, candidateMeaning.problem) ? 4 : 0;
-  const reusePurposeScore = sameMeaningfulConnectionValue(sourceMeaning.reusePurpose, candidateMeaning.reusePurpose) ? 4 : 0;
-  const decisionAxisScore = sameMeaningfulConnectionValue(sourceMeaning.decisionAxis, candidateMeaning.decisionAxis) ? 3 : 0;
+  const keywordScore = sharedTerms.length >= 2 ? Math.min(2.5, sharedTerms.length * 0.55) : 0;
+  const intentScore = semanticSimilarity >= 0.16 && sameMeaningfulConnectionValue(sourceMeaning.intent, candidateMeaning.intent) ? 2 : 0;
+  const problemScore = semanticSimilarity >= 0.12 && sameMeaningfulConnectionValue(sourceMeaning.problem, candidateMeaning.problem) ? 3 : 0;
+  const reusePurposeScore = semanticSimilarity >= 0.18 && sameMeaningfulConnectionValue(sourceMeaning.reusePurpose, candidateMeaning.reusePurpose) ? 1.5 : 0;
+  const decisionAxisScore = semanticSimilarity >= 0.18 && sameMeaningfulConnectionValue(sourceMeaning.decisionAxis, candidateMeaning.decisionAxis) ? 1.5 : 0;
   const recencyContextScore = 0;
   const userFeedbackScore = feedback[candidate.id]?.status === 'useful' ? 2 + Math.min(3, feedback[candidate.id]?.usedCount ?? 0) : feedback[candidate.id]?.status === 'later' ? 1 : 0;
-  const wordScore = Math.min(1, sharedWordScore(source, candidate) * 0.25);
-  const total = keywordScore + intentScore + problemScore + reusePurposeScore + decisionAxisScore + recencyContextScore + userFeedbackScore + wordScore;
+  const total = semanticSimilarity * 10 + keywordScore + intentScore + problemScore + reusePurposeScore + decisionAxisScore + recencyContextScore + userFeedbackScore;
 
-  if (sharedKeywords.length >= 2) reasons.push(`같은 주제: ${sharedKeywords.slice(0, 4).join(', ')} 키워드를 공유합니다.`);
+  if (semanticSimilarity >= 0.28 && sharedTerms.length >= 2) reasons.push(`의미 유사도: ${sharedTerms.slice(0, 4).join(', ')} 표현이 함께 반복됩니다.`);
+  else if (sharedTerms.length >= 2) reasons.push(`공통 단서: ${sharedTerms.slice(0, 4).join(', ')} 표현을 함께 포함합니다.`);
+  if (sharedKeywords.length >= 2 && keywordScore > 0) reasons.push(`같은 주제: ${sharedKeywords.slice(0, 4).join(', ')} 키워드를 공유합니다.`);
   if (intentScore > 0) reasons.push(`같은 의도: 둘 다 ‘${sourceMeaning.intent}’ 메모입니다.`);
   if (problemScore > 0) reasons.push(`같은 문제: 둘 다 ‘${sourceMeaning.problem}’을 풀고 있습니다.`);
   if (reusePurposeScore > 0) reasons.push(`같은 재사용 목적: 나중에 ‘${sourceMeaning.reusePurpose}’ 때 같이 보면 좋습니다.`);
   if (decisionAxisScore > 0) reasons.push(`같은 판단 축: ‘${sourceMeaning.decisionAxis}’ 판단과 연결됩니다.`);
-  if (recencyContextScore > 0) reasons.push(`${daysSince(candidate.created_at)}일 동안 묻혀 있던 생각입니다.`);
   if (userFeedbackScore > 0) reasons.push('이전에 도움 된 패턴과 비슷합니다.');
 
   return {
     note: candidate,
     score: Math.round(total * 10) / 10,
     scoreBreakdown: {
+      semanticScore,
       keywordScore,
       intentScore,
       problemScore,
@@ -3451,6 +3499,76 @@ function scoreRelatedNote(source: Note, candidate: Note, feedback: RetrievalFeed
     reasons,
     meaning: candidateMeaning,
   };
+}
+
+function isStrongRelatedCandidate(candidate: RelatedCandidate) {
+  const score = candidate.scoreBreakdown;
+  const hasMechanicalSimilarity = score.semanticScore >= 0.28 && score.keywordScore > 0;
+  const hasMeaningfulFieldMatch = score.semanticScore >= 0.16 && (score.problemScore > 0 || score.intentScore > 0 || score.decisionAxisScore > 0);
+  const hasUserSignal = score.userFeedbackScore > 0 && score.semanticScore >= 0.12;
+  return candidate.score >= 3.4 && candidate.reasons.length > 0 && (hasMechanicalSimilarity || hasMeaningfulFieldMatch || hasUserSignal);
+}
+
+function buildConnectionCorpusContext(notes: Note[]): ConnectionCorpusContext {
+  const documentFrequency = new Map<string, number>();
+  for (const note of notes) {
+    const terms = new Set(extractConnectionTerms(note));
+    for (const term of terms) documentFrequency.set(term, (documentFrequency.get(term) ?? 0) + 1);
+  }
+  return { documentCount: Math.max(1, notes.length), documentFrequency };
+}
+
+function buildConnectionVector(note: Note, context: ConnectionCorpusContext) {
+  const vector = new Map<string, number>();
+  const terms = extractConnectionTerms(note);
+  for (const term of terms) {
+    const documentFrequency = context.documentFrequency.get(term) ?? 1;
+    const documentRatio = documentFrequency / context.documentCount;
+    if (documentRatio > 0.42) continue;
+    const idf = Math.log((context.documentCount + 1) / (documentFrequency + 1)) + 1;
+    const lengthBoost = term.length >= 5 ? 1.15 : 1;
+    vector.set(term, (vector.get(term) ?? 0) + idf * lengthBoost);
+  }
+  return vector;
+}
+
+function extractConnectionTerms(note: Note) {
+  const rawText = [note.raw_text, note.ai_title, note.ai_summary].filter(Boolean).join(' ');
+  const tagTerms = (note.ai_tags ?? []).map(normalizeConnectionTerm).filter(isMeaningfulConnectionKeyword);
+  const textTerms = tokenizeConnectionText(rawText);
+  return Array.from(new Set([...tagTerms, ...textTerms]));
+}
+
+function tokenizeConnectionText(text: string) {
+  const normalized = text
+    .toLowerCase()
+    .replace(/[^0-9a-zA-Z가-힣]+/g, ' ')
+    .split(/\s+/)
+    .map(normalizeConnectionTerm)
+    .filter(isMeaningfulConnectionKeyword);
+  return normalized;
+}
+
+function normalizeConnectionTerm(value: string) {
+  return value.trim().toLowerCase().replace(/^[은는이가을를의에에서으로로과와도만]+|[은는이가을를의에에서으로로과와도만]+$/g, '');
+}
+
+function cosineConnectionSimilarity(a: Map<string, number>, b: Map<string, number>) {
+  if (a.size === 0 || b.size === 0) return 0;
+  let dot = 0;
+  let normA = 0;
+  let normB = 0;
+  for (const value of a.values()) normA += value * value;
+  for (const value of b.values()) normB += value * value;
+  for (const [term, value] of a) dot += value * (b.get(term) ?? 0);
+  if (normA <= 0 || normB <= 0) return 0;
+  return dot / (Math.sqrt(normA) * Math.sqrt(normB));
+}
+
+function sharedConnectionTerms(a: Map<string, number>, b: Map<string, number>) {
+  return Array.from(a.keys())
+    .filter((term) => b.has(term))
+    .sort((left, right) => ((b.get(right) ?? 0) + (a.get(right) ?? 0)) - ((b.get(left) ?? 0) + (a.get(left) ?? 0)));
 }
 
 function inferMeaning(note: Note): NoteMeaning {
