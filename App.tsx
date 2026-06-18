@@ -2152,7 +2152,8 @@ function ThoughtFlowDetailScreen({
   generationState?: { loading: boolean; error?: string };
 }) {
   const draft = flow.mergedDraft;
-  const [isSaved, setIsSaved] = useState(draft.status === 'saved' || flow.status === 'saved');
+  const hasDraftBody = draft.body.trim().length > 0;
+  const [isSaved, setIsSaved] = useState(hasDraftBody && (draft.status === 'saved' || flow.status === 'saved'));
   const [exporting, setExporting] = useState(false);
   const [sourcesExpanded, setSourcesExpanded] = useState(false);
   const statusLabel = isSaved ? '저장된 흐름' : flow.status === 'expanded' ? '확장된 흐름' : '임시 흐름';
@@ -2160,8 +2161,8 @@ function ThoughtFlowDetailScreen({
   const swipeBack = useSwipeBack(onBack);
 
   useEffect(() => {
-    setIsSaved(draft.status === 'saved' || flow.status === 'saved');
-  }, [draft.id, draft.status, flow.status]);
+    setIsSaved(hasDraftBody && (draft.status === 'saved' || flow.status === 'saved'));
+  }, [draft.id, draft.status, flow.status, hasDraftBody]);
 
   function saveDraft() {
     setIsSaved(true);
@@ -2208,7 +2209,7 @@ function ThoughtFlowDetailScreen({
         scrollIndicatorInsets={{ bottom: 180 }}
       >
         <View style={styles.flowMergedHero}>
-          <Text style={styles.flowMergedKicker}>자라난 글 초안</Text>
+          <Text style={styles.flowMergedKicker}>{hasDraftBody ? '자라난 글 초안' : '새로 묶인 생각'}</Text>
           <CopyableText style={styles.detailTitle} copyValue={draft.title}>{draft.title}</CopyableText>
           {generationState?.loading ? (
             <View style={styles.draftLoadingBox}>
@@ -2217,22 +2218,34 @@ function ThoughtFlowDetailScreen({
             </View>
           ) : null}
           {generationState?.error ? <Text style={styles.voiceErrorText}>{generationState.error}</Text> : null}
-          <ReadableReportBreakdown flow={flow} />
-          <CopyableText style={styles.mergedDraftBody} copyValue={draft.body}>{draft.body}</CopyableText>
+          {hasDraftBody ? (
+            <>
+              <ReadableReportBreakdown flow={flow} />
+              <CopyableText style={styles.mergedDraftBody} copyValue={draft.body}>{draft.body}</CopyableText>
+            </>
+          ) : (
+            <View style={styles.draftLoadingBox}>
+              <Text style={styles.flowSectionHint}>연결 기준이 바뀌어 새로 묶인 흐름이에요. AI 글 초안은 버튼을 누르면 생성돼요.</Text>
+            </View>
+          )}
 
           <View style={styles.compactActionRow}>
-            <Pressable style={[styles.primaryButton, isSaved && styles.savedPrimaryButton]} onPress={saveDraft}>
-              <Text style={styles.primaryButtonText}>{isSaved ? '저장됨' : '저장하기'}</Text>
-            </Pressable>
-            <Pressable style={[styles.secondaryButton, generationState?.loading && styles.disabledButton]} onPress={regenerateDraft} disabled={generationState?.loading}>
-              <Text style={styles.secondaryButtonText}>{generationState?.loading ? '생성 중...' : '다시 생성'}</Text>
+            {hasDraftBody ? (
+              <Pressable style={[styles.primaryButton, isSaved && styles.savedPrimaryButton]} onPress={saveDraft}>
+                <Text style={styles.primaryButtonText}>{isSaved ? '저장됨' : '저장하기'}</Text>
+              </Pressable>
+            ) : null}
+            <Pressable style={[hasDraftBody ? styles.secondaryButton : styles.primaryButton, generationState?.loading && styles.disabledButton]} onPress={regenerateDraft} disabled={generationState?.loading}>
+              <Text style={hasDraftBody ? styles.secondaryButtonText : styles.primaryButtonText}>{generationState?.loading ? '생성 중...' : hasDraftBody ? '다시 생성' : 'AI로 글 초안 만들기'}</Text>
             </Pressable>
           </View>
-          {isSaved ? <Text style={styles.savedDraftHint}>이 흐름을 계속 볼 수 있게 저장해둘게요.</Text> : null}
+          {isSaved && hasDraftBody ? <Text style={styles.savedDraftHint}>이 흐름을 계속 볼 수 있게 저장해둘게요.</Text> : null}
 
-          <Pressable style={[styles.exportButton, exporting && styles.disabledButton]} onPress={exportDraft} disabled={exporting}>
-            <Text style={styles.exportButtonText}>{exporting ? '내보내는 중...' : 'Markdown으로 내보내기'}</Text>
-          </Pressable>
+          {hasDraftBody ? (
+            <Pressable style={[styles.exportButton, exporting && styles.disabledButton]} onPress={exportDraft} disabled={exporting}>
+              <Text style={styles.exportButtonText}>{exporting ? '내보내는 중...' : 'Markdown으로 내보내기'}</Text>
+            </Pressable>
+          ) : null}
         </View>
 
         <View style={styles.detailSection}>
@@ -3212,29 +3225,16 @@ function buildFallbackMergedThoughtDraft(
   flowId: string,
   title: string,
   notes: Note[],
-  sharedProblem: string,
-  sharedDecisionAxis: string,
+  _sharedProblem: string,
+  _sharedDecisionAxis: string,
   now: string,
 ): MergedThoughtDraft {
-  const sourceInsights = notes
-    .slice(0, 5)
-    .map((note) => note.ai_summary || makeDraftSummary(note.raw_text))
-    .filter(Boolean);
-  const firstInsight = sourceInsights[0] ?? title;
-  const caseExamples = sourceInsights.slice(1, 4);
-  const evidenceText = caseExamples.length ? caseExamples.join(' ') : firstInsight;
-  const concreteAngle = sharedDecisionAxis && sharedDecisionAxis !== sharedProblem ? sharedDecisionAxis : title;
-
   return {
     id: `merged-draft-${slugifyFlowId(title)}-${notes.map((note) => note.id).join('-')}`,
     flowId,
     title,
-    body:
-      `## 핵심 발견\n${firstInsight} 이 흐름은 ${sharedProblem}이라는 문제를 중심으로 다시 읽을 수 있다. 같은 문장을 반복하는 대신, 원문마다 드러난 표현과 맥락을 기준으로 생각의 방향을 좁혀야 한다.\n\n` +
-      `## 모호했던 표현을 구체화하면\n흩어진 메모를 그대로 두면 모호하지만, ${concreteAngle}라는 판단축으로 묶으면 사용자가 실제로 정하려는 대상이 조금 더 분명해진다. 이 초안은 결론을 대신 확정하기보다, 어떤 빈칸을 채우면 생각이 행동 가능한 문장으로 바뀌는지 보여준다.\n\n` +
-      `## 생각의 변화\n처음에는 ${firstInsight}에서 출발했다. 이후 메모들이 더해지면서 ${evidenceText} 같은 조각이 보조 근거가 됐다. 지금은 이 조각들을 하나의 결론으로 몰아가기보다, 반복된 문제와 아직 덜 정해진 선택지를 분리해서 보는 단계다.\n\n` +
-      `## 다음에 이어볼 질문\n${makeLocalFallbackNextQuestion(sourceInsights, title)}`,
-    judgmentSummary: [sharedProblem, `${concreteAngle} 관점에서 빈칸을 더 구체화할 필요가 있다.`],
+    body: '',
+    judgmentSummary: [],
     sourceNoteIds: notes.map((note) => note.id),
     createdAt: now,
     status: 'draft',
