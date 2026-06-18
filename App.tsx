@@ -1,5 +1,5 @@
 ﻿import { StatusBar } from 'expo-status-bar';
-import { Audio } from 'expo-av';
+import { Audio, InterruptionModeAndroid, InterruptionModeIOS } from 'expo-av';
 import * as Clipboard from 'expo-clipboard';
 import * as FileSystem from 'expo-file-system/legacy';
 import * as Haptics from 'expo-haptics';
@@ -41,6 +41,17 @@ const ARCHIVE_PAGE_SIZE = 24;
 const THOUGHT_FLOW_FINGERPRINT_KEY = 'idea-second-brain:thought-flow-fingerprint:v1';
 const SCREEN_WIDTH = Dimensions.get('window').width;
 const MAX_RECORDING_MS = 20 * 60 * 1000;
+
+async function setExclusiveAudioModeAsync(allowsRecordingIOS: boolean) {
+  await Audio.setAudioModeAsync({
+    allowsRecordingIOS,
+    playsInSilentModeIOS: true,
+    interruptionModeIOS: InterruptionModeIOS.DoNotMix,
+    interruptionModeAndroid: InterruptionModeAndroid.DoNotMix,
+    shouldDuckAndroid: false,
+    playThroughEarpieceAndroid: false,
+  });
+}
 
 
 type AppTab = 'today' | 'organized' | 'archive';
@@ -528,7 +539,7 @@ export default function App() {
         return;
       }
 
-      await Audio.setAudioModeAsync({ allowsRecordingIOS: true, playsInSilentModeIOS: true });
+      await setExclusiveAudioModeAsync(true);
       const result = await Audio.Recording.createAsync(Audio.RecordingOptionsPresets.HIGH_QUALITY);
       recordingRef.current = result.recording;
       setRecording(result.recording);
@@ -797,6 +808,7 @@ export default function App() {
 
     try {
       if (audioPlayback?.noteId === note.id && playbackSoundRef.current && audioPlayback.paused) {
+        await setExclusiveAudioModeAsync(false);
         await playbackSoundRef.current.playAsync();
         setAudioPlayback((prev) => (prev ? { ...prev, paused: false, loading: false } : prev));
         return;
@@ -805,7 +817,7 @@ export default function App() {
       await playbackSoundRef.current?.unloadAsync();
       playbackSoundRef.current = null;
       setAudioPlayback({ noteId: note.id, positionMs: 0, durationMs: note.audio_duration_ms ?? 0, loading: true, paused: false });
-      await Audio.setAudioModeAsync({ allowsRecordingIOS: false, playsInSilentModeIOS: true, shouldDuckAndroid: true, playThroughEarpieceAndroid: false });
+      await setExclusiveAudioModeAsync(false);
       const uri = await resolvePlayableAudioUri(audioRef);
       const { sound } = await Audio.Sound.createAsync({ uri }, { shouldPlay: true, progressUpdateIntervalMillis: 250 });
       playbackSoundRef.current = sound;
