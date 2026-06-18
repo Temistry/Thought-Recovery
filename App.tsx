@@ -486,8 +486,6 @@ export default function App() {
             raw_text: trimmed,
             source_type: sourceType,
             audio_url: audioUrl ?? null,
-            local_audio_url: audioUrl && isLocalAudioUri(audioUrl) ? audioUrl : null,
-            audio_duration_ms: audioDurationMs ?? null,
             ai_title: makeDraftTitle(trimmed),
             ai_summary: makeDraftSummary(trimmed),
             ai_tags: [],
@@ -496,7 +494,11 @@ export default function App() {
           .select('*')
           .single();
         if (error) throw error;
-        const createdNote = data as Note;
+        const createdNote = {
+          ...(data as Note),
+          local_audio_url: audioUrl && isLocalAudioUri(audioUrl) ? audioUrl : (data as Note).local_audio_url ?? null,
+          audio_duration_ms: audioDurationMs ?? (data as Note).audio_duration_ms ?? null,
+        };
         setNotes((prev) => [createdNote, ...prev]);
         return createdNote;
       }
@@ -849,7 +851,8 @@ export default function App() {
           });
         if (uploadError) throw uploadError;
 
-        await supabase.from('notes').update({ audio_url: audioPath }).eq('id', noteId);
+        const { error: updateError } = await supabase.from('notes').update({ audio_url: audioPath }).eq('id', noteId);
+        if (updateError) throw updateError;
       }
 
       setVoiceJob(noteId, 'transcribing', 'AI가 받아쓰는 중');
@@ -888,7 +891,7 @@ export default function App() {
       );
       await loadNotes();
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
+      const message = describeUnknownError(error);
       setVoiceJob(noteId, 'failed', '전사 실패 · 다시 시도 가능', message);
       updateVoiceNoteProgress(noteId, {
         ai_title: '음성 전사 실패',
@@ -3630,11 +3633,28 @@ async function describeFunctionError(error: unknown) {
     }
   }
 
-  return error instanceof Error ? error.message : String(error);
+  return describeUnknownError(error);
+}
+
+function describeUnknownError(error: unknown) {
+  if (error instanceof Error && error.message) return error.message;
+  if (error && typeof error === 'object') {
+    const record = error as Record<string, unknown>;
+    const parts = [record.message, record.details, record.hint, record.code]
+      .filter((item): item is string => typeof item === 'string' && item.trim().length > 0);
+    if (parts.length) return parts.join('\n');
+    try {
+      const json = JSON.stringify(error);
+      if (json && json !== '{}') return json;
+    } catch {
+      // Fall through to String(error).
+    }
+  }
+  return String(error);
 }
 
 function showError(title: string, error: unknown) {
-  const message = error instanceof Error ? error.message : String(error);
+  const message = describeUnknownError(error);
   Alert.alert(title, message);
 }
 
