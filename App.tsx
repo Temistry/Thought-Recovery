@@ -2703,6 +2703,25 @@ function pickCohesiveFlowNotes(seed: Note, candidates: Note[], limit = 8) {
     .map((item) => item.note);
 }
 
+const GENERIC_THOUGHT_FLOW_KEYS = [
+  '비슷한 생각을 다시 판단할 때',
+  '나중에 다시 참고하려고 남긴 생각',
+  '생각이 떠올라 임시로 붙잡는 중',
+  '지금의 생각과 연결해 다음 판단의 재료로 쓸 수 있습니다.',
+];
+
+function isGenericThoughtFlowKey(value?: string | null) {
+  const key = value?.trim();
+  if (!key) return true;
+  return GENERIC_THOUGHT_FLOW_KEYS.some((generic) => key === generic || key.includes(generic));
+}
+
+function isMeaningfulThoughtFlowKey(value?: string | null) {
+  const key = value?.trim();
+  if (!key || key.length < 8) return false;
+  return !isGenericThoughtFlowKey(key);
+}
+
 function isLowSignalThoughtNote(note: Note) {
   const text = noteText(note).toLowerCase();
   if (text.length < 12) return true;
@@ -2799,14 +2818,14 @@ function buildRetrievalSections(notes: Note[], feedback: RetrievalFeedbackMap) {
 }
 
 function buildThoughtFlows(notes: Note[], feedback: RetrievalFeedbackMap): ThoughtFlow[] {
-  const visible = notes.filter((note) => feedback[note.id]?.status !== 'hidden');
+  const visible = notes.filter((note) => feedback[note.id]?.status !== 'hidden' && !isLowSignalThoughtNote(note));
   const groups = new Map<string, Note[]>();
 
   for (const note of visible) {
     const profile = inferMeaning(note);
     const keys = [profile.problem, profile.intent, profile.decisionAxis, profile.reusePurpose]
-      .filter(Boolean)
-      .map((key) => key.trim());
+      .map((key) => key.trim())
+      .filter(isMeaningfulThoughtFlowKey);
     for (const key of keys) {
       const current = groups.get(key) ?? [];
       current.push(note);
@@ -2818,15 +2837,19 @@ function buildThoughtFlows(notes: Note[], feedback: RetrievalFeedbackMap): Thoug
   for (const [key, group] of groups) {
     const unique = Array.from(new Map(group.map((note) => [note.id, note])).values());
     if (unique.length < 2) continue;
-    const ranked = unique
+    const seed = [...unique].sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())[0];
+    const cohesiveNotes = pickCohesiveFlowNotes(seed, unique, 5);
+    if (cohesiveNotes.length < 2) continue;
+    const ranked = cohesiveNotes
       .map((note) => ({ note, profile: inferMeaning(note) }))
       .sort((a, b) => new Date(b.note.created_at).getTime() - new Date(a.note.created_at).getTime())
       .slice(0, 5);
     const profiles = ranked.map((item) => item.profile);
-    const sharedProblem = mostCommon(profiles.map((profile) => profile.problem)) || key;
-    const sharedIntent = mostCommon(profiles.map((profile) => profile.intent)) || key;
-    const sharedDecisionAxis = mostCommon(profiles.map((profile) => profile.decisionAxis)) || key;
+    const sharedProblem = mostCommon(profiles.map((profile) => profile.problem).filter(isMeaningfulThoughtFlowKey)) || key;
+    const sharedIntent = mostCommon(profiles.map((profile) => profile.intent).filter(isMeaningfulThoughtFlowKey)) || key;
+    const sharedDecisionAxis = mostCommon(profiles.map((profile) => profile.decisionAxis).filter(isMeaningfulThoughtFlowKey)) || key;
     const flowTitle = makeFlowTitle(sharedProblem, sharedDecisionAxis);
+    if (isGenericThoughtFlowKey(flowTitle)) continue;
     const confidenceScore = Math.min(0.95, 0.45 + ranked.length * 0.1 + (sharedProblem === key ? 0.1 : 0));
     const now = new Date().toISOString();
     const noteIds = ranked.map((item) => item.note.id);
