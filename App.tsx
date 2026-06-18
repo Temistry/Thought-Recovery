@@ -40,6 +40,7 @@ const COPY_FEEDBACK_MS = 1400;
 const ARCHIVE_FAST_PREVIEW_NOTES = 24;
 const THOUGHT_FLOW_FINGERPRINT_KEY = 'idea-second-brain:thought-flow-fingerprint:v1';
 const SCREEN_WIDTH = Dimensions.get('window').width;
+const MAX_RECORDING_MS = 20 * 60 * 1000;
 
 
 type AppTab = 'today' | 'organized' | 'archive';
@@ -145,6 +146,7 @@ export default function App() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [recording, setRecording] = useState<Audio.Recording | null>(null);
+  const [recordingElapsedMs, setRecordingElapsedMs] = useState(0);
   const [activeTab, setActiveTab] = useState<AppTab>('today');
   const [selectedNoteId, setSelectedNoteId] = useState<string | null>(null);
   const [selectedNoteOverride, setSelectedNoteOverride] = useState<Note | null>(null);
@@ -165,6 +167,8 @@ export default function App() {
   const [noteRewriteInFlightId, setNoteRewriteInFlightId] = useState<string | null>(null);
   const migrationInFlightRef = useRef(false);
   const routingInFlightRef = useRef(false);
+  const recordingRef = useRef<Audio.Recording | null>(null);
+  const stoppingRecordingRef = useRef(false);
   const playbackSoundRef = useRef<Audio.Sound | null>(null);
 
   const cloudMode = isSupabaseConfigured && supabase !== null;
@@ -509,6 +513,7 @@ export default function App() {
   }
 
   async function startRecording() {
+    if (recordingRef.current || stoppingRecordingRef.current) return;
     try {
       const permission = await Audio.requestPermissionsAsync();
       if (!permission.granted) {
@@ -518,20 +523,37 @@ export default function App() {
 
       await Audio.setAudioModeAsync({ allowsRecordingIOS: true, playsInSilentModeIOS: true });
       const result = await Audio.Recording.createAsync(Audio.RecordingOptionsPresets.HIGH_QUALITY);
+      recordingRef.current = result.recording;
       setRecording(result.recording);
+      setRecordingElapsedMs(0);
     } catch (error) {
+      recordingRef.current = null;
+      setRecording(null);
+      setRecordingElapsedMs(0);
       showError('녹음 시작 실패', error);
     }
   }
 
   async function stopRecording() {
-    if (!recording) return;
+    const activeRecording = recordingRef.current ?? recording;
+    if (!activeRecording || stoppingRecordingRef.current) return;
+    stoppingRecordingRef.current = true;
     try {
-      await recording.stopAndUnloadAsync();
-      const status = await recording.getStatusAsync();
-      const uri = recording.getURI();
+      let durationMs = recordingElapsedMs;
+      try {
+        const currentStatus = await activeRecording.getStatusAsync();
+        durationMs = currentStatus.durationMillis ?? durationMs;
+      } catch {}
+      await activeRecording.stopAndUnloadAsync();
+      try {
+        const finalStatus = await activeRecording.getStatusAsync();
+        durationMs = finalStatus.durationMillis ?? durationMs;
+      } catch {}
+      const uri = activeRecording.getURI();
+      recordingRef.current = null;
       setRecording(null);
-      const note = await createNote('음성 메모를 저장하는 중입니다.', 'voice', uri, status.durationMillis ?? null);
+      setRecordingElapsedMs(0);
+      const note = await createNote('음성 메모를 저장하는 중입니다.', 'voice', uri, durationMs || null);
       if (note && uri && canUseCloud) {
         setVoiceJob(note.id, 'saving', '음성을 저장하는 중');
         await uploadAndTranscribeVoice(note.id, uri);
@@ -550,10 +572,37 @@ export default function App() {
         );
       }
     } catch (error) {
+      recordingRef.current = null;
       setRecording(null);
+      setRecordingElapsedMs(0);
       showError('녹음 저장 실패', error);
+    } finally {
+      stoppingRecordingRef.current = false;
     }
   }
+
+  useEffect(() => {
+    if (!recording) return;
+    let cancelled = false;
+    const timer = setInterval(() => {
+      const current = recordingRef.current;
+      if (!current || stoppingRecordingRef.current) return;
+      current.getStatusAsync()
+        .then((status) => {
+          if (cancelled) return;
+          const durationMs = status.durationMillis ?? 0;
+          setRecordingElapsedMs(durationMs);
+          if (durationMs >= MAX_RECORDING_MS) {
+            void stopRecording();
+          }
+        })
+        .catch(() => undefined);
+    }, 300);
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+    };
+  }, [recording]);
 
   async function updateNoteText(noteId: string, nextText: string) {
     const trimmed = nextText.trim();
@@ -1059,6 +1108,8 @@ export default function App() {
         <TodayRecorderCard
           recording={!!recording}
           saving={saving}
+          recordingElapsedMs={recordingElapsedMs}
+          maxRecordingMs={MAX_RECORDING_MS}
           onToggleRecording={recording ? stopRecording : startRecording}
         />
         <View style={styles.todaySignalGrid}>
@@ -1140,8 +1191,7 @@ export default function App() {
     }
 
     return (
-      <View style={styles.screenWithFab}>
-        <ScrollView contentContainerStyle={styles.retrievalScrollContent}>
+      <ScrollView contentContainerStyle={styles.retrievalScrollContent}>
         <AppTopBar title="보관" rightIcon="…" onRightPress={openTrash} />
         <View style={styles.searchCardCompact}>
           <TextInput
@@ -1153,16 +1203,7 @@ export default function App() {
         </View>
         {archivePreviewNotes.length ? <Text style={styles.archivePreviewHint}>최근 {Math.min(archivePreviewNotes.length, ARCHIVE_FAST_PREVIEW_NOTES)}개 먼저 보여주는 중</Text> : null}
         {renderArchiveGroups(visibleArchiveGroups, '아직 보관된 녹음이나 메모가 없어요.')}
-        </ScrollView>
-        <SpringPressable
-          style={[styles.archiveFloatingMic, recording && styles.archiveFloatingMicActive]}
-          onPress={recording ? stopRecording : startRecording}
-          disabled={saving}
-          accessibilityLabel="빠른 녹음"
-        >
-          <Text style={styles.archiveFloatingMicText}>🎙</Text>
-        </SpringPressable>
-      </View>
+      </ScrollView>
     );
   }
 
@@ -1603,14 +1644,32 @@ function TodaySignalCard({
 function TodayRecorderCard({
   recording,
   saving,
+  recordingElapsedMs,
+  maxRecordingMs,
   onToggleRecording,
 }: {
   recording: boolean;
   saving: boolean;
+  recordingElapsedMs: number;
+  maxRecordingMs: number;
   onToggleRecording: () => void;
 }) {
+  const remainingMs = Math.max(0, maxRecordingMs - recordingElapsedMs);
+  const progress = maxRecordingMs ? Math.min(1, recordingElapsedMs / maxRecordingMs) : 0;
+  const statusText = recording
+    ? remainingMs <= 30 * 1000
+      ? '곧 자동 저장돼요'
+      : remainingMs <= 2 * 60 * 1000
+        ? '최대 녹음 시간에 가까워졌어요'
+        : '듣는 중 · 끝내면 바로 저장해요'
+    : '최대 20분까지 녹음할 수 있어요';
+
   return (
     <View style={[styles.todayRecorderCard, recording && styles.todayRecorderCardActive]}>
+      <View style={styles.todayRecorderStatusRow}>
+        <Text style={[styles.todayRecorderStatus, recording && styles.todayRecorderStatusActive]}>{recording ? 'REC' : 'READY'}</Text>
+        <Text style={styles.todayRecorderTimer}>{formatRecordingTime(recordingElapsedMs)} / {formatRecordingTime(maxRecordingMs)}</Text>
+      </View>
       <View style={styles.todayMicHaloOuter}>
         <View style={styles.todayMicHaloInner}>
           <Text style={styles.todayMicIcon}>🎙️</Text>
@@ -1621,6 +1680,10 @@ function TodayRecorderCard({
           <View key={`${height}-${index}`} style={[styles.todayWaveformBar, { height: recording ? height : Math.max(7, height * 0.5) }]} />
         ))}
       </View>
+      <View style={styles.todayRecorderProgressTrack}>
+        <View style={[styles.todayRecorderProgressFill, { width: `${Math.max(2, progress * 100)}%` }]} />
+      </View>
+      <Text style={styles.todayRecorderSubtitle}>{statusText}</Text>
       <Pressable
         style={[styles.todayRecordButton, recording && styles.todayRecordButtonActive, saving && styles.disabledButton]}
         onPress={onToggleRecording}
@@ -3931,6 +3994,27 @@ const styles = StyleSheet.create({
     backgroundColor: '#fff7f4',
     borderColor: '#f0b7ad',
   },
+  todayRecorderStatusRow: {
+    width: '100%',
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 10,
+  },
+  todayRecorderStatus: {
+    color: '#9a8f82',
+    backgroundColor: '#f5f1eb',
+    borderRadius: 999,
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    fontSize: 11,
+    fontWeight: '900',
+    overflow: 'hidden',
+  },
+  todayRecorderStatusActive: {
+    color: '#fff',
+    backgroundColor: '#f05b49',
+  },
   todayMicHaloOuter: {
     width: 148,
     height: 126,
@@ -4004,6 +4088,18 @@ const styles = StyleSheet.create({
     borderRadius: 999,
     backgroundColor: '#e8ded5',
     opacity: 0.95,
+  },
+  todayRecorderProgressTrack: {
+    width: '100%',
+    height: 8,
+    borderRadius: 999,
+    backgroundColor: '#f0e8df',
+    overflow: 'hidden',
+  },
+  todayRecorderProgressFill: {
+    height: '100%',
+    borderRadius: 999,
+    backgroundColor: '#f06458',
   },
   todayRecordButton: {
     width: '100%',
@@ -5425,38 +5521,11 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: '700',
   },
-  screenWithFab: {
-    flex: 1,
-    position: 'relative',
-  },
   searchCardCompact: {
     backgroundColor: '#f5f4f2',
     borderRadius: 18,
     paddingHorizontal: 2,
     paddingVertical: 2,
-  },
-  archiveFloatingMic: {
-    position: 'absolute',
-    right: 16,
-    bottom: 94,
-    width: 58,
-    height: 58,
-    borderRadius: 29,
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: '#f06458',
-    shadowColor: '#d9594f',
-    shadowOffset: { width: 0, height: 10 },
-    shadowOpacity: 0.26,
-    shadowRadius: 18,
-    elevation: 5,
-  },
-  archiveFloatingMicActive: {
-    backgroundColor: '#db4b42',
-  },
-  archiveFloatingMicText: {
-    color: '#fff',
-    fontSize: 26,
   },
   retrievalHeroTopRow: {
     flexDirection: 'row',
