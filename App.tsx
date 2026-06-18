@@ -37,7 +37,7 @@ const AUDIO_BUCKET = 'note-audio';
 const AnimatedPressable = Animated.createAnimatedComponent(Pressable);
 const RETRIEVAL_FEEDBACK_KEY = 'idea-second-brain:retrieval-feedback';
 const COPY_FEEDBACK_MS = 1400;
-const ARCHIVE_FAST_PREVIEW_NOTES = 24;
+const ARCHIVE_PAGE_SIZE = 24;
 const THOUGHT_FLOW_FINGERPRINT_KEY = 'idea-second-brain:thought-flow-fingerprint:v1';
 const SCREEN_WIDTH = Dimensions.get('window').width;
 const MAX_RECORDING_MS = 20 * 60 * 1000;
@@ -156,6 +156,7 @@ export default function App() {
   const [audioPlayback, setAudioPlayback] = useState<AudioPlaybackState | null>(null);
   const [cachedThoughtFlows, setCachedThoughtFlows] = useState<ThoughtFlow[]>([]);
   const [archivePreviewNotes, setArchivePreviewNotes] = useState<Note[]>([]);
+  const [archivePreviewLimit, setArchivePreviewLimit] = useState(ARCHIVE_PAGE_SIZE);
   const [archiveSearchResults, setArchiveSearchResults] = useState<Note[]>([]);
   const [trashNotes, setTrashNotes] = useState<Note[]>([]);
   const [showTrash, setShowTrash] = useState(false);
@@ -188,7 +189,6 @@ export default function App() {
     [notes],
   );
   const filteredNotes = useMemo(() => filterNotes(activityNotes, searchQuery), [activityNotes, searchQuery]);
-  const archiveFastNotes = searchQuery.trim() ? archiveSearchResults : archivePreviewNotes;
   const archiveSourceNotes = searchQuery.trim() ? archiveSearchResults : (archivePreviewNotes.length ? archivePreviewNotes : filteredNotes);
   const archiveGroups = useMemo(() => groupNotesByDate(archiveSourceNotes), [archiveSourceNotes]);
   const thoughtFlowFingerprint = useMemo(() => computeThoughtFlowFingerprint(feedNotes, retrievalFeedback), [feedNotes, retrievalFeedback]);
@@ -316,13 +316,13 @@ export default function App() {
       }).catch(() => undefined);
       return () => { cancelled = true; };
     }
-    listRecentLocalNotes(ARCHIVE_FAST_PREVIEW_NOTES).then((rows) => {
+    listRecentLocalNotes(archivePreviewLimit).then((rows) => {
       if (!cancelled) setArchivePreviewNotes(rows);
     }).catch(() => undefined);
     return () => {
       cancelled = true;
     };
-  }, [activeTab, searchQuery]);
+  }, [activeTab, searchQuery, archivePreviewLimit]);
 
   useEffect(() => {
     return () => {
@@ -737,7 +737,7 @@ export default function App() {
     if (!restored) return;
     setTrashNotes((prev) => prev.filter((note) => note.id !== noteId));
     setNotes((prev) => [restored, ...prev]);
-    setArchivePreviewNotes((prev) => [restored, ...prev].slice(0, ARCHIVE_FAST_PREVIEW_NOTES));
+    setArchivePreviewNotes((prev) => [restored, ...prev].slice(0, archivePreviewLimit));
   }
 
   async function permanentlyDeleteTrashNote(noteId: string) {
@@ -1178,6 +1178,16 @@ export default function App() {
     );
   }
 
+  function maybeLoadMoreArchive(event: { nativeEvent: { layoutMeasurement: { height: number }; contentOffset: { y: number }; contentSize: { height: number } } }) {
+    if (searchQuery.trim()) return;
+    if (archivePreviewNotes.length < archivePreviewLimit) return;
+    const { layoutMeasurement, contentOffset, contentSize } = event.nativeEvent;
+    const distanceFromBottom = contentSize.height - (layoutMeasurement.height + contentOffset.y);
+    if (distanceFromBottom < 360) {
+      setArchivePreviewLimit((current) => (archivePreviewNotes.length >= current ? current + ARCHIVE_PAGE_SIZE : current));
+    }
+  }
+
   function renderArchive() {
     const visibleArchiveGroups = archiveGroups;
     if (searchQuery.trim()) {
@@ -1203,7 +1213,11 @@ export default function App() {
     }
 
     return (
-      <ScrollView contentContainerStyle={styles.retrievalScrollContent}>
+      <ScrollView
+        contentContainerStyle={styles.retrievalScrollContent}
+        onScroll={maybeLoadMoreArchive}
+        scrollEventThrottle={120}
+      >
         <AppTopBar title="보관" rightIcon="…" onRightPress={openTrash} />
         <View style={styles.searchCardCompact}>
           <TextInput
@@ -1213,7 +1227,6 @@ export default function App() {
             onChangeText={setSearchQuery}
           />
         </View>
-        {archivePreviewNotes.length ? <Text style={styles.archivePreviewHint}>최근 {Math.min(archivePreviewNotes.length, ARCHIVE_FAST_PREVIEW_NOTES)}개 먼저 보여주는 중</Text> : null}
         {renderArchiveGroups(visibleArchiveGroups, '아직 보관된 녹음이나 메모가 없어요.')}
       </ScrollView>
     );
@@ -5538,12 +5551,7 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: '800',
   },
-  archivePreviewHint: {
-    color: '#9a8f82',
-    fontSize: 12,
-    textAlign: 'center',
-    marginBottom: 8,
-  },
+
   trashNoteCard: {
     backgroundColor: '#fffefd',
     borderColor: '#eee7df',
