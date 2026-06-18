@@ -1,4 +1,4 @@
--- Idea Second Brain MVP schema
+﻿-- Idea Second Brain MVP schema
 -- Supabase SQL editor에서 실행한다.
 
 create extension if not exists pgcrypto;
@@ -32,7 +32,8 @@ create table if not exists public.notes (
   routing_status text not null default 'routed' check (routing_status in ('pending_review', 'routing', 'routed', 'route_failed')),
   is_pinned boolean not null default false,
   created_at timestamptz not null default now(),
-  updated_at timestamptz not null default now()
+  updated_at timestamptz not null default now(),
+  deleted_at timestamptz
 );
 
 create table if not exists public.note_links (
@@ -87,6 +88,7 @@ create policy "note_versions_insert_own" on public.note_versions for insert with
 create policy "note_versions_delete_own" on public.note_versions for delete using (auth.uid() = user_id);
 
 create index if not exists notes_user_created_idx on public.notes(user_id, created_at desc);
+create index if not exists notes_user_deleted_created_idx on public.notes(user_id, deleted_at, created_at desc);
 create index if not exists notes_user_parent_created_idx on public.notes(user_id, parent_note_id, created_at desc);
 create index if not exists notes_user_routing_status_idx on public.notes(user_id, routing_status, created_at desc);
 create index if not exists notes_user_pinned_idx on public.notes(user_id, is_pinned, updated_at desc);
@@ -133,3 +135,4 @@ for delete using (
   bucket_id = 'note-audio'
   and auth.uid()::text = (storage.foldername(name))[1]
 );
+
