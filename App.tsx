@@ -1812,8 +1812,11 @@ function SwipeableArchiveNoteCard({
   const responder = useMemo(
     () => PanResponder.create({
       onStartShouldSetPanResponder: () => false,
-      onMoveShouldSetPanResponder: (_event, gesture) => gesture.dx < -6 && Math.abs(gesture.dx) > Math.abs(gesture.dy) * 1.15,
-      onMoveShouldSetPanResponderCapture: (_event, gesture) => gesture.dx < -8 && Math.abs(gesture.dx) > Math.abs(gesture.dy) * 1.2,
+      onStartShouldSetPanResponderCapture: () => false,
+      onMoveShouldSetPanResponder: (_event, gesture) => gesture.dx < -3 && Math.abs(gesture.dx) > Math.abs(gesture.dy) * 0.8,
+      onMoveShouldSetPanResponderCapture: (_event, gesture) => gesture.dx < -3 && Math.abs(gesture.dx) > Math.abs(gesture.dy) * 0.8,
+      onPanResponderTerminationRequest: () => false,
+      onShouldBlockNativeResponder: () => true,
       onPanResponderGrant: () => {
         setSwiping(true);
         deleteArmedRef.current = false;
@@ -1822,8 +1825,8 @@ function SwipeableArchiveNoteCard({
       onPanResponderMove: (_event, gesture) => {
         const raw = Math.min(0, gesture.dx);
         const deleteThreshold = SCREEN_WIDTH * 0.5;
-        const maxFollowDistance = SCREEN_WIDTH * 0.58;
-        const resisted = raw > -maxFollowDistance ? raw : -maxFollowDistance + (raw + maxFollowDistance) * 0.28;
+        const maxFollowDistance = SCREEN_WIDTH * 0.62;
+        const resisted = raw > -maxFollowDistance ? raw : -maxFollowDistance + (raw + maxFollowDistance) * 0.24;
         translateX.setValue(resisted);
         const crossedMiddle = Math.abs(raw) >= deleteThreshold;
         if (crossedMiddle && !deleteArmedRef.current) {
@@ -1843,11 +1846,11 @@ function SwipeableArchiveNoteCard({
   );
 
   return (
-    <View style={styles.swipeArchiveShell}>
+    <View style={styles.swipeArchiveShell} {...responder.panHandlers}>
       <View style={[styles.swipeTrashReveal, swiping && styles.swipeTrashRevealActive]} pointerEvents="none">
         <Text style={styles.swipeTrashIcon}>🗑</Text>
       </View>
-      <Animated.View style={{ transform: [{ translateX }] }} {...responder.panHandlers}>
+      <Animated.View style={{ transform: [{ translateX }] }}>
         <NoteCard
           note={note}
           voiceJob={voiceJob}
