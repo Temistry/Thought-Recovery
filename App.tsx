@@ -3385,13 +3385,13 @@ function makeUseSuggestion(note: Note) {
 
 function retrieveCandidates(note: Note, notes: Note[], feedback: RetrievalFeedbackMap) {
   const byId = new Map<string, RelatedCandidate>();
+  const noteMeaning = inferMeaning(note);
   const routes = [
-    (candidate: Note) => keywordOverlap(inferMeaning(note), inferMeaning(candidate)) > 0,
-    (candidate: Note) => inferMeaning(candidate).intent === inferMeaning(note).intent,
-    (candidate: Note) => inferMeaning(candidate).problem === inferMeaning(note).problem,
-    (candidate: Note) => inferMeaning(candidate).reusePurpose === inferMeaning(note).reusePurpose,
-    (candidate: Note) => inferMeaning(candidate).decisionAxis === inferMeaning(note).decisionAxis,
-    (candidate: Note) => daysSince(candidate.created_at) >= 3,
+    (candidate: Note) => keywordOverlap(noteMeaning, inferMeaning(candidate)) >= 2,
+    (candidate: Note) => sameMeaningfulConnectionValue(inferMeaning(candidate).intent, noteMeaning.intent),
+    (candidate: Note) => sameMeaningfulConnectionValue(inferMeaning(candidate).problem, noteMeaning.problem),
+    (candidate: Note) => sameMeaningfulConnectionValue(inferMeaning(candidate).reusePurpose, noteMeaning.reusePurpose),
+    (candidate: Note) => sameMeaningfulConnectionValue(inferMeaning(candidate).decisionAxis, noteMeaning.decisionAxis),
     (candidate: Note) => feedback[candidate.id]?.status === 'useful',
   ];
 
@@ -3417,17 +3417,17 @@ function scoreRelatedNote(source: Note, candidate: Note, feedback: RetrievalFeed
   const candidateMeaning = inferMeaning(candidate);
   const reasons: string[] = [];
   const sharedKeywords = candidateMeaning.keywords.filter((keyword) => sourceMeaning.keywords.includes(keyword));
-  const keywordScore = Math.min(2, sharedKeywords.length * 0.5);
-  const intentScore = sourceMeaning.intent === candidateMeaning.intent ? 4 : 0;
-  const problemScore = sourceMeaning.problem === candidateMeaning.problem ? 4 : 0;
-  const reusePurposeScore = sourceMeaning.reusePurpose === candidateMeaning.reusePurpose ? 4 : 0;
-  const decisionAxisScore = sourceMeaning.decisionAxis === candidateMeaning.decisionAxis ? 3 : 0;
-  const recencyContextScore = daysSince(candidate.created_at) >= 3 ? 1 : 0;
+  const keywordScore = sharedKeywords.length >= 2 ? Math.min(2, sharedKeywords.length * 0.5) : 0;
+  const intentScore = sameMeaningfulConnectionValue(sourceMeaning.intent, candidateMeaning.intent) ? 4 : 0;
+  const problemScore = sameMeaningfulConnectionValue(sourceMeaning.problem, candidateMeaning.problem) ? 4 : 0;
+  const reusePurposeScore = sameMeaningfulConnectionValue(sourceMeaning.reusePurpose, candidateMeaning.reusePurpose) ? 4 : 0;
+  const decisionAxisScore = sameMeaningfulConnectionValue(sourceMeaning.decisionAxis, candidateMeaning.decisionAxis) ? 3 : 0;
+  const recencyContextScore = 0;
   const userFeedbackScore = feedback[candidate.id]?.status === 'useful' ? 2 + Math.min(3, feedback[candidate.id]?.usedCount ?? 0) : feedback[candidate.id]?.status === 'later' ? 1 : 0;
   const wordScore = Math.min(1, sharedWordScore(source, candidate) * 0.25);
   const total = keywordScore + intentScore + problemScore + reusePurposeScore + decisionAxisScore + recencyContextScore + userFeedbackScore + wordScore;
 
-  if (sharedKeywords.length > 0) reasons.push(`같은 주제: ${sharedKeywords.slice(0, 4).join(', ')} 키워드를 공유합니다.`);
+  if (sharedKeywords.length >= 2) reasons.push(`같은 주제: ${sharedKeywords.slice(0, 4).join(', ')} 키워드를 공유합니다.`);
   if (intentScore > 0) reasons.push(`같은 의도: 둘 다 ‘${sourceMeaning.intent}’ 메모입니다.`);
   if (problemScore > 0) reasons.push(`같은 문제: 둘 다 ‘${sourceMeaning.problem}’을 풀고 있습니다.`);
   if (reusePurposeScore > 0) reasons.push(`같은 재사용 목적: 나중에 ‘${sourceMeaning.reusePurpose}’ 때 같이 보면 좋습니다.`);
@@ -3455,7 +3455,8 @@ function scoreRelatedNote(source: Note, candidate: Note, feedback: RetrievalFeed
 
 function inferMeaning(note: Note): NoteMeaning {
   const text = noteText(note);
-  const keywords = Array.from(new Set([...(note.ai_tags ?? []), ...inferTags(note), ...importantWords(text).slice(0, 8)]));
+  const keywords = Array.from(new Set([...(note.ai_tags ?? []), ...inferTags(note), ...importantWords(text).slice(0, 8)]))
+    .filter(isMeaningfulConnectionKeyword);
   const intent = note.intent ?? inferIntent(text);
   const problem = note.problem ?? inferProblem(text, intent);
   const situation = note.situation ?? inferSituation(text);
@@ -3486,6 +3487,35 @@ function inferMeaning(note: Note): NoteMeaning {
 
 function keywordOverlap(a: NoteMeaning, b: NoteMeaning) {
   return b.keywords.filter((keyword) => a.keywords.includes(keyword)).length;
+}
+
+const GENERIC_CONNECTION_KEYWORDS = new Set([
+  '음성', '메모', '생각', '기록', '원문', '저장', '보관', '정리', '확인', '나중', '관련', '주제', '내용', '사용', '활용', '관심',
+]);
+
+function isMeaningfulConnectionKeyword(keyword: string) {
+  const clean = keyword.trim().toLowerCase();
+  if (clean.length < 2) return false;
+  if (GENERIC_CONNECTION_KEYWORDS.has(clean)) return false;
+  if (/^\d+$/.test(clean)) return false;
+  return true;
+}
+
+function sameMeaningfulConnectionValue(a?: string | null, b?: string | null) {
+  if (!a || !b || a !== b) return false;
+  return isMeaningfulRelatedValue(a);
+}
+
+function isMeaningfulRelatedValue(value: string) {
+  const clean = value.trim();
+  if (!clean || clean.length < 8) return false;
+  return ![
+    '나중에 다시 참고하려고 남긴 생각',
+    '나중에 필요한 것을 미리 준비하려는 생각',
+    '비슷한 생각을 다시 판단할 때',
+    '생각이 떠올라 임시로 붙잡는 중',
+    '지금의 생각과 연결해 다음 판단의 재료로 쓸 수 있습니다.',
+  ].some((generic) => clean === generic || clean.includes(generic));
 }
 
 function inferIntent(text: string) {
