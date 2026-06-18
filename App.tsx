@@ -712,18 +712,34 @@ export default function App() {
     setSaving(true);
     try {
       const deletedAt = new Date().toISOString();
-      if (canUseCloud && supabase && !noteToTrash.id.startsWith('local-')) {
-        const { error } = await supabase.from('notes').update({ deleted_at: deletedAt }).eq('id', noteToTrash.id);
-        if (error) throw error;
-        await moveLocalNoteToTrash({ ...noteToTrash, deleted_at: deletedAt }).catch(() => undefined);
-      } else {
-        await moveLocalNoteToTrash(noteToTrash);
+      const idsToTrash = new Set([
+        noteToTrash.id,
+        ...notes.filter((note) => note.parent_note_id === noteToTrash.id).map((note) => note.id),
+      ]);
+      const targetNotes = notes.filter((note) => idsToTrash.has(note.id));
+      if (!targetNotes.some((note) => note.id === noteToTrash.id)) targetNotes.push(noteToTrash);
+      const targetIds = Array.from(idsToTrash);
+
+      if (canUseCloud && supabase) {
+        const cloudIds = targetIds.filter((id) => !id.startsWith('local-'));
+        if (cloudIds.length > 0) {
+          const { data, error } = await supabase
+            .from('notes')
+            .update({ deleted_at: deletedAt })
+            .in('id', cloudIds)
+            .select('id');
+          if (error) throw error;
+          if (!data || data.length === 0) throw new Error('삭제할 메모를 찾지 못했어요. 잠시 후 다시 불러와서 확인해주세요.');
+        }
       }
-      setNotes((prev) => prev.filter((note) => note.id !== noteToTrash.id));
-      setArchivePreviewNotes((prev) => prev.filter((note) => note.id !== noteToTrash.id));
-      setArchiveSearchResults((prev) => prev.filter((note) => note.id !== noteToTrash.id));
+
+      await Promise.all(targetNotes.map((note) => moveLocalNoteToTrash({ ...note, deleted_at: deletedAt }).catch(() => undefined)));
+      setNotes((prev) => prev.filter((note) => !idsToTrash.has(note.id)));
+      setArchivePreviewNotes((prev) => prev.filter((note) => !idsToTrash.has(note.id)));
+      setArchiveSearchResults((prev) => prev.filter((note) => !idsToTrash.has(note.id)));
       setSelectedNoteId(null);
       setSelectedNoteOverride(null);
+      await loadNotes();
       void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => undefined);
     } catch (error) {
       showError('휴지통 이동 실패', error);
@@ -755,12 +771,13 @@ export default function App() {
   }
 
   async function retryVoiceTranscription(note: Note) {
-    if (!note.audio_url) {
+    const audioRef = note.local_audio_url ?? note.audio_url;
+    if (!audioRef) {
       Alert.alert('재시도 불가', '재시도할 음성 파일 정보가 없어요.');
       return;
     }
 
-    await uploadAndTranscribeVoice(note.id, note.audio_url);
+    await uploadAndTranscribeVoice(note.id, audioRef);
   }
 
   async function resolvePlayableAudioUri(audioRef: string) {
@@ -1750,8 +1767,9 @@ function NoteCard({
   onPress: () => void;
   onRetryVoice: () => void;
 }) {
-  const isProcessing = voiceJob ? ['saving', 'uploading', 'transcribing'].includes(voiceJob.status) : note.raw_text.includes('전사하는 중입니다') || note.raw_text.includes('업로드하는 중입니다');
-  const isFailed = voiceJob?.status === 'failed' || note.ai_title?.includes('실패');
+  const isProcessing = voiceJob ? ['saving', 'uploading', 'transcribing'].includes(voiceJob.status) : isProcessingVoiceNote(note);
+  const isPersistedFailed = isFailedVoiceNote(note);
+  const isFailed = voiceJob?.status === 'failed' || isPersistedFailed;
   const category = inferCategory(note);
   const replyCount = Math.max(0, (note.ai_thread_reason ? 1 : 0));
 
@@ -1780,10 +1798,10 @@ function NoteCard({
         {replyCount > 0 ? <Text style={styles.iconMeta}>💬 {replyCount}</Text> : null}
         <RoutingBadge note={note} compact />
       </View>
-      {voiceJob && voiceJob.status !== 'done' ? (
+      {(voiceJob && voiceJob.status !== 'done') || (!voiceJob && isPersistedFailed) ? (
         <View style={styles.voiceStatusBox}>
-          <Text style={styles.voiceStatusText}>{voiceJob.message}</Text>
-          {voiceJob.status === 'failed' ? (
+          <Text style={styles.voiceStatusText}>{voiceJob?.message ?? '전사 실패 · 다시 시도 가능'}</Text>
+          {isFailed ? (
             <Pressable style={styles.retryButton} onPress={onRetryVoice}>
               <Text style={styles.retryButtonText}>다시 전사</Text>
             </Pressable>
@@ -2769,8 +2787,11 @@ function NoteAudioBlock({
   onStopVoice: () => Promise<void>;
   onRetryVoice: (note: Note) => Promise<void>;
 }) {
-  const hasAudio = !!(note.local_audio_url ?? note.audio_url);
-  const shouldShow = hasAudio || (voiceJob && voiceJob.status !== 'done');
+  const audioRef = note.local_audio_url ?? note.audio_url;
+  const hasAudio = !!audioRef;
+  const isPersistedFailed = isFailedVoiceNote(note);
+  const isFailed = voiceJob?.status === 'failed' || isPersistedFailed;
+  const shouldShow = hasAudio || (voiceJob && voiceJob.status !== 'done') || isPersistedFailed;
   if (!shouldShow) return null;
 
   const durationMs = playback?.durationMs || note.audio_duration_ms || 0;
@@ -2784,9 +2805,9 @@ function NoteAudioBlock({
       <View style={styles.noteAudioTopRow}>
         <View style={styles.noteAudioTextWrap}>
           <Text style={styles.noteAudioKicker}>음성 메모</Text>
-          <Text style={styles.noteAudioTitle}>{voiceJob && voiceJob.status !== 'done' ? voiceJob.message : '원본 녹음이 보관되어 있어요'}</Text>
+          <Text style={styles.noteAudioTitle}>{voiceJob && voiceJob.status !== 'done' ? voiceJob.message : isPersistedFailed ? '전사에 실패했지만 원본 음성은 보관되어 있어요' : '원본 녹음이 보관되어 있어요'}</Text>
         </View>
-        <Text style={styles.noteAudioBadge}>{voiceJob?.status === 'failed' ? '실패' : hasAudio ? '보관됨' : '처리 중'}</Text>
+        <Text style={styles.noteAudioBadge}>{isFailed ? '실패' : hasAudio ? '보관됨' : '처리 중'}</Text>
       </View>
       <View style={styles.noteWaveformRow}>
         {bars.map((height, index) => {
@@ -2811,7 +2832,7 @@ function NoteAudioBlock({
         </>
       ) : null}
       {voiceJob?.error ? <Text style={styles.voiceErrorText}>{voiceJob.error}</Text> : null}
-      {voiceJob?.status === 'failed' ? (
+      {isFailed ? (
         <Pressable style={styles.retryButton} onPress={() => onRetryVoice(note)} disabled={saving}>
           <Text style={styles.retryButtonText}>음성 다시 전사</Text>
         </Pressable>
@@ -3831,6 +3852,13 @@ function isSameLocalDay(value: string, date: Date) {
 function isProcessingVoiceNote(note: Note, voiceJob?: VoiceJob) {
   if (voiceJob && ['saving', 'uploading', 'transcribing'].includes(voiceJob.status)) return true;
   return note.raw_text.includes('전사하는 중입니다') || note.raw_text.includes('업로드하는 중입니다');
+}
+
+function isFailedVoiceNote(note: Note) {
+  const title = note.ai_title?.toLowerCase() ?? '';
+  const summary = note.ai_summary?.toLowerCase() ?? '';
+  const tags = (note.ai_tags ?? []).join(' ').toLowerCase();
+  return !!(note.local_audio_url ?? note.audio_url) && (title.includes('전사 실패') || summary.includes('다시 시도') || tags.includes('재시도'));
 }
 
 function formatArchiveDateHeader(value: string) {
