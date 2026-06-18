@@ -1791,10 +1791,10 @@ function SwipeableArchiveNoteCard({
 }) {
   const translateX = useRef(new Animated.Value(0)).current;
   const [swiping, setSwiping] = useState(false);
-  const thresholdHapticRef = useRef(false);
+  const deleteArmedRef = useRef(false);
 
   const reset = useCallback(() => {
-    thresholdHapticRef.current = false;
+    deleteArmedRef.current = false;
     setSwiping(false);
     Animated.spring(translateX, { toValue: 0, friction: 8, tension: 150, useNativeDriver: true }).start();
   }, [translateX]);
@@ -1805,7 +1805,7 @@ function SwipeableArchiveNoteCard({
       onTrash();
       translateX.setValue(0);
       setSwiping(false);
-      thresholdHapticRef.current = false;
+      deleteArmedRef.current = false;
     });
   }, [onTrash, translateX]);
 
@@ -1816,22 +1816,25 @@ function SwipeableArchiveNoteCard({
       onMoveShouldSetPanResponderCapture: (_event, gesture) => gesture.dx < -8 && Math.abs(gesture.dx) > Math.abs(gesture.dy) * 1.2,
       onPanResponderGrant: () => {
         setSwiping(true);
-        thresholdHapticRef.current = false;
+        deleteArmedRef.current = false;
         translateX.stopAnimation();
       },
       onPanResponderMove: (_event, gesture) => {
         const raw = Math.min(0, gesture.dx);
-        const resisted = raw > -120 ? raw : -120 + (raw + 120) * 0.36;
+        const deleteThreshold = SCREEN_WIDTH * 0.5;
+        const maxFollowDistance = SCREEN_WIDTH * 0.58;
+        const resisted = raw > -maxFollowDistance ? raw : -maxFollowDistance + (raw + maxFollowDistance) * 0.28;
         translateX.setValue(resisted);
-        const kineticDistance = Math.abs(raw) + Math.max(0, Math.abs(gesture.vx)) * 90;
-        if (!thresholdHapticRef.current && kineticDistance > SCREEN_WIDTH * 0.42) {
-          thresholdHapticRef.current = true;
+        const crossedMiddle = Math.abs(raw) >= deleteThreshold;
+        if (crossedMiddle && !deleteArmedRef.current) {
+          deleteArmedRef.current = true;
           void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium).catch(() => undefined);
+        } else if (!crossedMiddle && deleteArmedRef.current) {
+          deleteArmedRef.current = false;
         }
       },
-      onPanResponderRelease: (_event, gesture) => {
-        const kineticDistance = Math.abs(Math.min(0, gesture.dx)) + Math.max(0, -gesture.vx) * 120;
-        if (gesture.dx < -SCREEN_WIDTH * 0.38 || kineticDistance > SCREEN_WIDTH * 0.5) commitTrash();
+      onPanResponderRelease: () => {
+        if (deleteArmedRef.current) commitTrash();
         else reset();
       },
       onPanResponderTerminate: reset,
