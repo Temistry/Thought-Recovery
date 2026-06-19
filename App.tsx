@@ -2243,9 +2243,8 @@ function ThoughtFlowDetailScreen({
   const draft = flow.mergedDraft;
   const hasDraftBody = draft.body.trim().length > 0;
   const [isSaved, setIsSaved] = useState(hasDraftBody && (draft.status === 'saved' || flow.status === 'saved'));
-  const [exporting, setExporting] = useState(false);
   const [sourcesExpanded, setSourcesExpanded] = useState(false);
-  const statusLabel = isSaved ? '저장된 흐름' : hasDraftBody ? '정식 흐름' : flow.status === 'expanded' ? '확장 대기' : '정리 전';
+  const statusLabel = isSaved ? '저장된 흐름' : hasDraftBody ? '정식 흐름' : '정리 전';
 
   const swipeBack = useSwipeBack(onBack);
 
@@ -2261,30 +2260,6 @@ function ThoughtFlowDetailScreen({
     await onRegenerateDraft(flow);
   }
 
-  async function exportDraft() {
-    const markdown = buildThoughtFlowExportMarkdown(flow);
-    const title = `${draft.title}.md`;
-
-    setExporting(true);
-    try {
-      if (Platform.OS === 'ios' && FileSystem.cacheDirectory) {
-        const fileUri = `${FileSystem.cacheDirectory}${makeSafeFileName(draft.title)}.md`;
-        await FileSystem.writeAsStringAsync(fileUri, markdown, { encoding: FileSystem.EncodingType.UTF8 });
-        await Share.share({ title, url: fileUri });
-      } else {
-        await Share.share({ title, message: markdown });
-      }
-    } catch (error) {
-      showError('내보내기 실패', error);
-    } finally {
-      setExporting(false);
-    }
-  }
-
-  function deferFlow(message: string) {
-    Alert.alert('흐름을 잠시 내려둘게요', message);
-  }
-
   return (
     <Animated.View style={[styles.detailShell, swipeBack.animatedStyle]} {...swipeBack.responder.panHandlers}>
       <View style={styles.detailFixedTopBar}>
@@ -2298,20 +2273,38 @@ function ThoughtFlowDetailScreen({
         scrollIndicatorInsets={{ bottom: 180 }}
       >
         <View style={styles.flowMergedHero}>
-          <Text style={styles.flowMergedKicker}>{hasDraftBody ? 'AI 정리본' : '정리 전 생각'}</Text>
+          <Text style={styles.flowMergedKicker}>{hasDraftBody ? 'AI 정리본' : '정리 전'}</Text>
           <CopyableText style={styles.detailTitle} copyValue={draft.title}>{draft.title}</CopyableText>
           {generationState?.loading ? (
             <View style={styles.draftLoadingBox}>
               <ActivityIndicator />
-              <Text style={styles.flowSectionHint}>AI가 흩어진 메모를 하나의 생각으로 엮는 중이에요.</Text>
+              <Text style={styles.flowSectionHint}>AI가 백그라운드에서 정리하고 있어요.</Text>
             </View>
           ) : null}
           {generationState?.error ? <Text style={styles.voiceErrorText}>{generationState.error}</Text> : null}
           {hasDraftBody ? (
-            <CopyableText style={styles.mergedDraftBody} copyValue={draft.body}>{draft.body}</CopyableText>
+            <View style={styles.flowDocumentBody}>
+              {draft.judgmentSummary.length ? (
+                <View style={styles.flowDocumentSection}>
+                  <Text style={styles.flowDocumentHeading}>핵심 요약</Text>
+                  {draft.judgmentSummary.slice(0, 3).map((item, index) => (
+                    <Text key={`${item}-${index}`} style={styles.flowDocumentBullet}>• {item}</Text>
+                  ))}
+                </View>
+              ) : null}
+              <View style={styles.flowDocumentSection}>
+                <Text style={styles.flowDocumentHeading}>생각의 흐름</Text>
+                <CopyableText style={styles.mergedDraftBody} copyValue={draft.body}>{draft.body}</CopyableText>
+              </View>
+              <View style={styles.nextQuestionCard}>
+                <Text style={styles.nextQuestionLabel}>다음에 이어볼 질문</Text>
+                <Text style={styles.nextQuestionBody}>{flow.nextQuestion}</Text>
+              </View>
+            </View>
           ) : (
-            <View style={styles.draftLoadingBox}>
-              <Text style={styles.flowSectionHint}>아직 정리본이 없어요. 버튼을 누르면 AI가 백그라운드에서 정리해서 이 안에 채워둘게요.</Text>
+            <View style={styles.flowPendingBox}>
+              <Text style={styles.flowPendingTitle}>아직 정리본이 없어요</Text>
+              <Text style={styles.flowSectionHint}>버튼을 누르면 AI가 백그라운드에서 정리해서 이 안에 채워둘게요.</Text>
             </View>
           )}
 
@@ -2326,17 +2319,11 @@ function ThoughtFlowDetailScreen({
             </Pressable>
           </View>
           {isSaved && hasDraftBody ? <Text style={styles.savedDraftHint}>이 흐름을 계속 볼 수 있게 저장해둘게요.</Text> : null}
-
-          {hasDraftBody ? (
-            <Pressable style={[styles.exportButton, exporting && styles.disabledButton]} onPress={exportDraft} disabled={exporting}>
-              <Text style={styles.exportButtonText}>{exporting ? '내보내는 중...' : 'Markdown으로 내보내기'}</Text>
-            </Pressable>
-          ) : null}
         </View>
 
         <View style={styles.detailSection}>
           <Pressable style={styles.collapsedSourcePill} onPress={() => setSourcesExpanded((value) => !value)}>
-            <Text style={styles.detailSectionTitle}>소스 녹음/메모 {flow.notes.length}개</Text>
+            <Text style={styles.detailSectionTitle}>원문 보기</Text>
             <Text style={styles.expandReasonText}>{sourcesExpanded ? '접기' : '열기'}</Text>
           </Pressable>
           {sourcesExpanded ? (
@@ -5324,6 +5311,23 @@ const styles = StyleSheet.create({
     color: '#2f2924',
     fontSize: 16,
     lineHeight: 26,
+  },
+  flowDocumentBody: {
+    gap: 18,
+  },
+  flowDocumentSection: {
+    gap: 9,
+  },
+  flowDocumentHeading: {
+    color: '#171412',
+    fontSize: 15,
+    fontWeight: '900',
+  },
+  flowDocumentBullet: {
+    color: '#3f3934',
+    fontSize: 14,
+    lineHeight: 21,
+    fontWeight: '700',
   },
   judgmentBox: {
     backgroundColor: '#fbfaf7',
