@@ -2217,7 +2217,7 @@ function ThoughtFlowDetailScreen({
   const [isSaved, setIsSaved] = useState(hasDraftBody && (draft.status === 'saved' || flow.status === 'saved'));
   const [exporting, setExporting] = useState(false);
   const [sourcesExpanded, setSourcesExpanded] = useState(false);
-  const statusLabel = isSaved ? '저장된 흐름' : flow.status === 'expanded' ? '확장된 흐름' : '임시 흐름';
+  const statusLabel = isSaved ? '저장된 흐름' : hasDraftBody ? '정식 흐름' : flow.status === 'expanded' ? '확장 대기' : '정리 전';
 
   const swipeBack = useSwipeBack(onBack);
 
