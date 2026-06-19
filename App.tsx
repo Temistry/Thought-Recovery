@@ -4036,13 +4036,58 @@ function showError(title: string, error: unknown) {
   Alert.alert(title, message);
 }
 
+const UI_THEME = {
+  color: {
+    appBg: '#fffdf9',
+    surface: '#ffffff',
+    surfaceWarm: '#fffaf4',
+    surfaceSoft: '#fbf6ef',
+    border: '#efe6dc',
+    borderStrong: '#ead9ca',
+    text: '#171412',
+    textSoft: '#5f554a',
+    textMuted: '#8f8578',
+    coral: '#ef6a5a',
+    coralDeep: '#d94c3d',
+    coralSoft: '#fff0ec',
+    greenSoft: '#edf4e9',
+    greenText: '#5f6f56',
+    goldSoft: '#f2e7d7',
+    goldText: '#7c5c2e',
+  },
+  radius: {
+    sm: 14,
+    md: 18,
+    lg: 22,
+    xl: 28,
+    hero: 36,
+    pill: 999,
+  },
+  shadow: {
+    card: {
+      shadowColor: '#1e1712',
+      shadowOffset: { width: 0, height: 8 },
+      shadowOpacity: 0.045,
+      shadowRadius: 16,
+      elevation: 1,
+    },
+    hero: {
+      shadowColor: '#8c4b35',
+      shadowOffset: { width: 0, height: 18 },
+      shadowOpacity: 0.08,
+      shadowRadius: 28,
+      elevation: 3,
+    },
+  },
+} as const;
+
 const styles = StyleSheet.create({
   safeArea: {
     flex: 1,
     width: '100%',
     maxWidth: '100%',
     overflow: 'hidden',
-    backgroundColor: '#fffdfb',
+    backgroundColor: UI_THEME.color.appBg,
   },
   container: {
     flex: 1,
@@ -4055,7 +4100,7 @@ const styles = StyleSheet.create({
     paddingBottom: 10,
     gap: 12,
     overflow: 'hidden',
-    backgroundColor: '#fffdfb',
+    backgroundColor: UI_THEME.color.appBg,
   },
   header: {
     gap: 4,
@@ -4066,12 +4111,12 @@ const styles = StyleSheet.create({
     fontWeight: '700',
   },
   title: {
-    color: '#171412',
+    color: UI_THEME.color.text,
     fontSize: 25,
     fontWeight: '900',
   },
   status: {
-    color: '#7a746b',
+    color: UI_THEME.color.textMuted,
     fontSize: 13,
   },
   tabContent: {
@@ -4648,8 +4693,8 @@ const styles = StyleSheet.create({
   },
   primaryButton: {
     flex: 1,
-    backgroundColor: '#ef6a5a',
-    borderRadius: 14,
+    backgroundColor: UI_THEME.color.coral,
+    borderRadius: UI_THEME.radius.sm,
     paddingVertical: 13,
     alignItems: 'center',
   },
@@ -4662,8 +4707,8 @@ const styles = StyleSheet.create({
   },
   secondaryButton: {
     flex: 1,
-    backgroundColor: '#efe4d4',
-    borderRadius: 14,
+    backgroundColor: UI_THEME.color.goldSoft,
+    borderRadius: UI_THEME.radius.sm,
     paddingVertical: 13,
     alignItems: 'center',
   },
@@ -5775,14 +5820,14 @@ const styles = StyleSheet.create({
   bottomTabs: {
     flexDirection: 'row',
     gap: 8,
-    backgroundColor: '#fffefd',
-    borderColor: '#eee7df',
+    backgroundColor: UI_THEME.color.surface,
+    borderColor: UI_THEME.color.border,
     borderWidth: 1,
-    borderRadius: 18,
+    borderRadius: UI_THEME.radius.md,
     padding: 8,
-    shadowColor: '#000',
+    shadowColor: '#1e1712',
     shadowOffset: { width: 0, height: 8 },
-    shadowOpacity: 0.1,
+    shadowOpacity: 0.08,
     shadowRadius: 16,
     elevation: 4,
   },
@@ -5793,7 +5838,7 @@ const styles = StyleSheet.create({
     paddingVertical: 9,
   },
   tabButtonActive: {
-    backgroundColor: '#fff0ec',
+    backgroundColor: UI_THEME.color.coralSoft,
   },
   tabIcon: {
     color: '#8f8578',
@@ -5807,7 +5852,7 @@ const styles = StyleSheet.create({
     marginTop: 2,
   },
   tabTextActive: {
-    color: '#d94c3d',
+    color: UI_THEME.color.coralDeep,
   },
   scrollContent: {
     width: '100%',
