@@ -29,7 +29,7 @@ import {
 import type { GestureResponderEvent } from 'react-native';
 import type { Session } from '@supabase/supabase-js';
 
-import { createLocalNote, deleteLocalTrashNote, listCachedThoughtFlows, listLocalNotes, listLocalTrashNotes, listRecentLocalNotes, moveLocalNoteToTrash, readCachedThoughtFingerprint, readLocalKeyValue, rebuildCachedThoughtFingerprint, replaceCachedThoughtFlows, replaceLocalNotes, restoreLocalTrashNote, searchLocalNotes, updateLocalNote, writeLocalKeyValue } from './src/lib/localNotes';
+import { createLocalNote, deleteLocalTrashNote, listCachedThoughtDrafts, listCachedThoughtFlows, listLocalNotes, listLocalTrashNotes, listRecentLocalNotes, moveLocalNoteToTrash, readCachedThoughtFingerprint, readLocalKeyValue, rebuildCachedThoughtFingerprint, replaceCachedThoughtFlows, replaceLocalNotes, restoreLocalTrashNote, saveCachedThoughtDraft, searchLocalNotes, updateLocalNote, writeLocalKeyValue } from './src/lib/localNotes';
 import { buildPromptPatternContext } from './src/lib/thoughtFingerprint';
 import { isSupabaseConfigured, supabase } from './src/lib/supabase';
 import { Note, SourceType, ThoughtFingerprintSnapshot } from './src/types';
@@ -276,6 +276,18 @@ export default function App() {
     readCachedThoughtFingerprint()
       .then((snapshot) => {
         if (!cancelled && snapshot) setThoughtFingerprint(snapshot);
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    listCachedThoughtDrafts()
+      .then((drafts) => {
+        if (!cancelled) setGeneratedDrafts(drafts);
       })
       .catch(() => undefined);
     return () => {
@@ -1071,7 +1083,10 @@ export default function App() {
       if (result?.error) throw new Error(result.error);
       if (!result?.draft) throw new Error('합친 메모 초안 응답이 비어 있어요.');
 
-      setGeneratedDrafts((prev) => ({ ...prev, [flow.id]: result.draft as MergedThoughtDraft }));
+      const draft = result.draft as MergedThoughtDraft;
+      await saveCachedThoughtDraft(draft);
+      setGeneratedDrafts((prev) => ({ ...prev, [flow.id]: draft }));
+      setCachedThoughtFlows((prev) => prev.map((item) => item.id === flow.id ? { ...item, title: draft.title || item.title, mergedDraft: draft, updatedAt: draft.createdAt || item.updatedAt } : item));
       setDraftGenerationState((prev) => ({ ...prev, [flow.id]: { loading: false } }));
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
