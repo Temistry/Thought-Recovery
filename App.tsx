@@ -1151,13 +1151,7 @@ export default function App() {
 
     return (
       <ScrollView contentContainerStyle={styles.todayScrollContent}>
-        <AppTopBar
-          title="오늘"
-          leftIcon="⚙"
-          rightIcon="◴"
-          onLeftPress={() => setShowAccount(true)}
-          onRightPress={() => changeTab('archive')}
-        />
+        <AppTopBar title="오늘" />
         <TodayRecorderCard
           recording={!!recording}
           saving={saving}
@@ -1265,6 +1259,15 @@ export default function App() {
           />
         </View>
         {renderArchiveGroups(visibleArchiveGroups, '아직 보관된 녹음이나 메모가 없어요.')}
+        {session?.user ? (
+          <Pressable style={styles.archiveAccountEntry} onPress={() => setShowAccount(true)}>
+            <View>
+              <Text style={styles.archiveAccountTitle}>계정과 데이터</Text>
+              <Text style={styles.archiveAccountHint}>동기화 상태와 로그인 정보를 확인해요</Text>
+            </View>
+            <Text style={styles.archiveAccountArrow}>›</Text>
+          </Pressable>
+        ) : null}
       </ScrollView>
     );
   }
@@ -1491,30 +1494,19 @@ function AccountScreen({
           <Text style={styles.accountDisplayName} numberOfLines={1}>{displayName}</Text>
         </View>
 
-        <SettingsSection title="생각회수기 맞춤 설정">
-          <SettingsRow icon="◔" label="개인 맞춤 설정" />
-          <SettingsRow icon="▱" label="메모리" />
-          <SettingsRow icon="▦" label="앱" />
-        </SettingsSection>
-
         <SettingsSection title="계정">
           <SettingsRow icon="✉" label="이메일" value={email} hideChevron />
           <SettingsRow icon="↔" label="동기화" value="켜짐" hideChevron />
           <SettingsRow icon="#" label="사용자 ID" value={shortUserId} hideChevron />
         </SettingsSection>
 
-        <SettingsSection title="앱 설정">
-          <SettingsRow icon="⚙" label="일반" />
-          <SettingsRow icon="◌" label="알림" />
-          <SettingsRow icon="▥" label="음성" />
-          <SettingsRow icon="▣" label="데이터 제어" />
-          <SettingsRow icon="▤" label="저장 공간" />
+        <SettingsSection title="데이터">
+          <SettingsRow icon="▱" label="원본 보관" value="보관 탭" hideChevron />
+          <SettingsRow icon="▤" label="내보내기" value="메모 상세" hideChevron />
         </SettingsSection>
 
-        <SettingsSection title="도움말">
-          <SettingsRow icon="⚑" label="앱 문제 신고하기" />
-          <SettingsRow icon="?" label="도움말 센터" />
-          <SettingsRow icon="ⓘ" label="정보" />
+        <SettingsSection title="앱 정보">
+          <SettingsRow icon="ⓘ" label="생각회수기" value="MVP" hideChevron />
         </SettingsSection>
 
         <Pressable style={styles.accountLogoutRow} onPress={onSignOut}>
@@ -6092,6 +6084,36 @@ const styles = StyleSheet.create({
     paddingHorizontal: 4,
     paddingVertical: 4,
     ...UI_THEME.shadow.card,
+  },
+  archiveAccountEntry: {
+    marginTop: 4,
+    marginBottom: 10,
+    backgroundColor: UI_THEME.color.surface,
+    borderColor: UI_THEME.color.border,
+    borderWidth: 1,
+    borderRadius: UI_THEME.radius.md,
+    paddingHorizontal: 16,
+    paddingVertical: 14,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 12,
+  },
+  archiveAccountTitle: {
+    color: UI_THEME.color.text,
+    fontSize: 15,
+    fontWeight: '900',
+  },
+  archiveAccountHint: {
+    color: UI_THEME.color.textMuted,
+    fontSize: 12,
+    fontWeight: '700',
+    marginTop: 3,
+  },
+  archiveAccountArrow: {
+    color: UI_THEME.color.textMuted,
+    fontSize: 24,
+    fontWeight: '700',
   },
   retrievalHeroTopRow: {
     flexDirection: 'row',
