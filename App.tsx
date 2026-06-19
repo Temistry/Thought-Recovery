@@ -19,6 +19,7 @@ import {
   Dimensions,
   FlatList,
   KeyboardAvoidingView,
+  NativeModules,
   PanResponder,
   Platform,
   Pressable,
@@ -55,6 +56,11 @@ let speechRecognitionModuleCache: SpeechRecognitionModule | null | undefined;
 
 function getSpeechRecognitionModule() {
   if (speechRecognitionModuleCache !== undefined) return speechRecognitionModuleCache;
+
+  if (!NativeModules.ExpoSpeechRecognition) {
+    speechRecognitionModuleCache = null;
+    return speechRecognitionModuleCache;
+  }
 
   try {
     speechRecognitionModuleCache = require('expo-speech-recognition/build/ExpoSpeechRecognitionModule').ExpoSpeechRecognitionModule;
