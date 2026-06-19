@@ -241,9 +241,12 @@ export default function App() {
   const archiveGroups = useMemo(() => groupNotesByDate(archiveSourceNotes), [archiveSourceNotes]);
   const thoughtFlowFingerprint = useMemo(() => computeThoughtFlowFingerprint(feedNotes, retrievalFeedback), [feedNotes, retrievalFeedback]);
   const retrievalSections = useMemo(() => buildRetrievalSections(feedNotes, retrievalFeedback), [feedNotes, retrievalFeedback]);
-  const visibleThoughtFlows = retrievalSections.thoughtFlows.length > 0 ? retrievalSections.thoughtFlows : cachedThoughtFlows;
+  const visibleThoughtFlows = useMemo(
+    () => mergeThoughtFlows(retrievalSections.thoughtFlows, cachedThoughtFlows),
+    [retrievalSections.thoughtFlows, cachedThoughtFlows],
+  );
   const visibleThoughtFlowsWithDrafts = useMemo(
-    () => visibleThoughtFlows.map((flow) => generatedDrafts[flow.id] ? { ...flow, mergedDraft: generatedDrafts[flow.id] } : flow),
+    () => visibleThoughtFlows.map((flow) => generatedDrafts[flow.id] ? { ...flow, title: generatedDrafts[flow.id].title || flow.title, mergedDraft: generatedDrafts[flow.id] } : flow),
     [visibleThoughtFlows, generatedDrafts],
   );
   const selectedThoughtFlow = useMemo(() => {
@@ -363,9 +366,10 @@ export default function App() {
 
   useEffect(() => {
     if (retrievalSections.thoughtFlows.length === 0) return;
-    setCachedThoughtFlows(retrievalSections.thoughtFlows);
+    const nextFlows = mergeThoughtFlows(retrievalSections.thoughtFlows, cachedThoughtFlows);
+    setCachedThoughtFlows(nextFlows);
     void Promise.all([
-      replaceCachedThoughtFlows(retrievalSections.thoughtFlows),
+      replaceCachedThoughtFlows(nextFlows),
       writeLocalKeyValue(THOUGHT_FLOW_FINGERPRINT_KEY, thoughtFlowFingerprint),
     ]).catch(() => undefined);
   }, [retrievalSections.thoughtFlows, thoughtFlowFingerprint]);
@@ -1327,7 +1331,9 @@ export default function App() {
       const draft = result.draft as MergedThoughtDraft;
       await saveCachedThoughtDraft(draft);
       setGeneratedDrafts((prev) => ({ ...prev, [flow.id]: draft }));
-      setCachedThoughtFlows((prev) => prev.map((item) => item.id === flow.id ? { ...item, title: draft.title || item.title, mergedDraft: draft, updatedAt: draft.createdAt || item.updatedAt } : item));
+      const savedFlow = { ...flow, title: draft.title || flow.title, mergedDraft: draft, updatedAt: draft.createdAt || flow.updatedAt };
+      setCachedThoughtFlows((prev) => mergeThoughtFlows([savedFlow], prev));
+      await replaceCachedThoughtFlows(mergeThoughtFlows([savedFlow], cachedThoughtFlows));
       setDraftGenerationState((prev) => ({ ...prev, [flow.id]: { loading: false } }));
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
@@ -3236,6 +3242,36 @@ function buildCollectionSummaries(notes: Note[]): CollectionSummary[] {
   return collections.filter((collection) => collection.notes.length > 0 || collection.id !== 'uncategorized');
 }
 
+
+function mergeThoughtFlows(primary: ThoughtFlow[], secondary: ThoughtFlow[]) {
+  const byId = new Map<string, ThoughtFlow>();
+  const orderedIds: string[] = [];
+
+  function upsert(flow: ThoughtFlow, preferExistingDraft: boolean) {
+    const existing = byId.get(flow.id);
+    if (!existing) {
+      byId.set(flow.id, flow);
+      orderedIds.push(flow.id);
+      return;
+    }
+
+    const existingHasDraft = existing.mergedDraft.body.trim().length > 0;
+    const nextHasDraft = flow.mergedDraft.body.trim().length > 0;
+    const mergedDraft = preferExistingDraft && existingHasDraft && !nextHasDraft ? existing.mergedDraft : flow.mergedDraft;
+    byId.set(flow.id, {
+      ...existing,
+      ...flow,
+      title: mergedDraft.title || flow.title || existing.title,
+      mergedDraft,
+      updatedAt: [existing.updatedAt, flow.updatedAt].sort().at(-1) ?? flow.updatedAt,
+    });
+  }
+
+  primary.forEach((flow) => upsert(flow, true));
+  secondary.forEach((flow) => upsert(flow, true));
+
+  return orderedIds.map((id) => byId.get(id)).filter((flow): flow is ThoughtFlow => !!flow).slice(0, 8);
+}
 
 function computeThoughtFlowFingerprint(notes: Note[], feedback: RetrievalFeedbackMap) {
   const notePart = notes
