@@ -1132,11 +1132,10 @@ export default function App() {
 
   function renderToday() {
     const todayNotes = activityNotes.filter((note) => isSameLocalDay(note.created_at, new Date()));
-    const thoughtFeedNotes = todayNotes.slice(0, 4);
-    const newThoughtFlows = visibleThoughtFlows.filter((flow) => flow.notes.some((note) => isSameLocalDay(note.created_at, new Date())));
+    const thoughtFeedNotes = todayNotes.slice(0, 3);
 
     return (
-      <ScrollView contentContainerStyle={styles.scrollContent}>
+      <ScrollView contentContainerStyle={styles.todayScrollContent}>
         <AppTopBar
           title="오늘"
           leftIcon="⚙"
@@ -1151,27 +1150,11 @@ export default function App() {
           maxRecordingMs={MAX_RECORDING_MS}
           onToggleRecording={recording ? stopRecording : startRecording}
         />
-        {newThoughtFlows.length ? (
-          <SpringPressable
-            style={styles.newThoughtReportCta}
-            onPress={() => openThoughtFlow(newThoughtFlows[0])}
-            accessibilityLabel="새로 자라난 생각 보기"
-          >
-            <View style={styles.newThoughtReportIcon}><Text style={styles.newThoughtReportIconText}>🌱</Text></View>
-            <View style={styles.newThoughtReportTextWrap}>
-              <Text style={styles.newThoughtReportTitle}>새로 자라난 생각 보기</Text>
-              <Text style={styles.newThoughtReportHint}>{newThoughtFlows.length}개의 생각 리포트가 새로 생겼어요</Text>
-            </View>
-            <Text style={styles.newThoughtReportArrow}>›</Text>
-          </SpringPressable>
-        ) : null}
 
-        <View style={styles.retrievalSection}>
-          <View style={styles.retrievalSectionHeader}>
-            <View>
-              <Text style={styles.sectionTitle}>오늘 남긴 생각</Text>
-            </View>
-            {todayNotes.length > 4 ? (
+        <View style={styles.todayThoughtSection}>
+          <View style={styles.todayThoughtHeader}>
+            <Text style={styles.sectionTitle}>오늘 남긴 생각</Text>
+            {todayNotes.length > 3 ? (
               <Pressable onPress={() => changeTab('archive')}>
                 <Text style={styles.linkButtonText}>전체보기</Text>
               </Pressable>
@@ -1179,17 +1162,18 @@ export default function App() {
           </View>
           {thoughtFeedNotes.length ? (
             thoughtFeedNotes.map((note) => (
-              <NoteCard
+              <TodayThoughtMiniCard
                 key={note.id}
                 note={note}
                 voiceJob={voiceJobs[note.id]}
-                relatedCount={0}
                 onPress={() => openNote(note)}
-                onRetryVoice={() => retryVoiceTranscription(note)}
               />
             ))
           ) : (
-            <Text style={styles.empty}>아직 남긴 생각이 없어요. 마이크로 첫 생각을 남겨보세요.</Text>
+            <View style={styles.todayEmptyCard}>
+              <Text style={styles.todayEmptyTitle}>아직 남긴 생각이 없어요</Text>
+              <Text style={styles.todayEmptyBody}>마이크를 누르고 첫 생각을 말해보세요.</Text>
+            </View>
           )}
         </View>
       </ScrollView>
@@ -1234,7 +1218,7 @@ export default function App() {
           <View style={styles.searchCard}>
             <TextInput
               style={styles.searchInput}
-              placeholder="녹음, 원문, 제목을 검색해보세요"
+              placeholder="원본 생각 검색"
               value={searchQuery}
               onChangeText={setSearchQuery}
             />
@@ -1260,7 +1244,7 @@ export default function App() {
         <View style={styles.searchCardCompact}>
           <TextInput
             style={styles.searchInput}
-            placeholder="녹음, 원문, 정리된 제목을 검색"
+            placeholder="원본 생각 검색"
             value={searchQuery}
             onChangeText={setSearchQuery}
           />
@@ -1704,42 +1688,51 @@ function TodayRecorderCard({
 }) {
   const remainingMs = Math.max(0, maxRecordingMs - recordingElapsedMs);
   const progress = maxRecordingMs ? Math.min(1, recordingElapsedMs / maxRecordingMs) : 0;
-  const statusText = recording
+  const heroTitle = recording ? '지금 말하는 중' : saving ? '생각을 받았어요' : '떠오른 생각을 그냥 말하세요';
+  const heroHint = recording
     ? remainingMs <= 30 * 1000
-      ? '곧 자동 저장돼요'
-      : remainingMs <= 2 * 60 * 1000
-        ? '최대 녹음 시간에 가까워졌어요'
-        : '듣는 중 · 끝내면 바로 저장해요'
-    : '최대 20분까지 녹음할 수 있어요';
+      ? '곧 자동으로 정리돼요'
+      : '끝내면 자동으로 정리돼요'
+    : saving
+      ? '정리는 뒤에서 이어갈게요. 바로 다음 생각을 말해도 돼요.'
+      : '정리와 분류는 나중에 할게요.';
 
   return (
     <View style={[styles.todayRecorderCard, recording && styles.todayRecorderCardActive]}>
-      <View style={styles.todayRecorderStatusRow}>
-        <Text style={[styles.todayRecorderStatus, recording && styles.todayRecorderStatusActive]}>{recording ? 'REC' : 'READY'}</Text>
-        <Text style={styles.todayRecorderTimer}>{formatRecordingTime(recordingElapsedMs)} / {formatRecordingTime(maxRecordingMs)}</Text>
+      <View style={styles.todayHeroCopy}>
+        <Text style={styles.todayHeroTitle}>{heroTitle}</Text>
+        <Text style={styles.todayHeroHint}>{heroHint}</Text>
       </View>
-      <View style={styles.todayMicHaloOuter}>
-        <View style={styles.todayMicHaloInner}>
-          <Text style={styles.todayMicIcon}>🎙️</Text>
-        </View>
-      </View>
-      <View style={styles.todayWaveformRow}>
-        {[8, 18, 13, 28, 12, 36, 14, 24, 11, 32, 15, 30].map((height, index) => (
-          <View key={`${height}-${index}`} style={[styles.todayWaveformBar, { height: recording ? height : Math.max(7, height * 0.5) }]} />
-        ))}
-      </View>
-      <View style={styles.todayRecorderProgressTrack}>
-        <View style={[styles.todayRecorderProgressFill, { width: `${Math.max(2, progress * 100)}%` }]} />
-      </View>
-      <Text style={styles.todayRecorderSubtitle}>{statusText}</Text>
+
       <Pressable
-        style={[styles.todayRecordButton, recording && styles.todayRecordButtonActive, saving && styles.disabledButton]}
+        style={[styles.todayMicButton, recording && styles.todayMicButtonActive, saving && styles.disabledButton]}
         onPress={onToggleRecording}
         disabled={saving}
+        accessibilityRole="button"
+        accessibilityLabel={recording ? '녹음 끝내기' : '생각 말하기'}
       >
-        <Text style={styles.todayRecordButtonIcon}>{recording ? '■' : '●'}</Text>
-        <Text style={styles.todayRecordButtonText}>{recording ? '녹음 끝내고 저장' : '생각 말하기'}</Text>
+        <View style={[styles.todayMicHaloOuter, recording && styles.todayMicHaloOuterActive]}>
+          <View style={[styles.todayMicHaloInner, recording && styles.todayMicHaloInnerActive]}>
+            <Text style={styles.todayMicIcon}>{recording ? '■' : '🎙️'}</Text>
+          </View>
+        </View>
       </Pressable>
+
+      {recording ? (
+        <>
+          <Text style={styles.todayRecorderTimer}>{formatRecordingTime(recordingElapsedMs)}</Text>
+          <View style={styles.todayWaveformRow}>
+            {[8, 18, 13, 28, 12, 36, 14, 24, 11, 32, 15, 30].map((height, index) => (
+              <View key={`${height}-${index}`} style={[styles.todayWaveformBar, { height }]} />
+            ))}
+          </View>
+          <View style={styles.todayRecorderProgressTrack}>
+            <View style={[styles.todayRecorderProgressFill, { width: `${Math.max(2, progress * 100)}%` }]} />
+          </View>
+        </>
+      ) : null}
+
+      <Text style={styles.todayRecorderSubtitle}>{recording ? '끝내기' : saving ? '정리 중...' : '탭해서 말하기'}</Text>
     </View>
   );
 }
@@ -1747,7 +1740,7 @@ function TodayRecorderCard({
 function BottomTabs({ activeTab, onChange }: { activeTab: AppTab; onChange: (tab: AppTab) => void }) {
   const tabs: Array<{ id: AppTab; label: string; icon: string }> = [
     { id: 'today', label: '오늘', icon: '✦' },
-    { id: 'organized', label: '생각', icon: '🌱' },
+    { id: 'organized', label: '흐름', icon: '🌱' },
     { id: 'archive', label: '보관', icon: '▤' }
   ];
 
@@ -1767,6 +1760,25 @@ function BottomTabs({ activeTab, onChange }: { activeTab: AppTab; onChange: (tab
         );
       })}
     </View>
+  );
+}
+
+function TodayThoughtMiniCard({ note, voiceJob, onPress }: { note: Note; voiceJob?: VoiceJob; onPress: () => void }) {
+  const isProcessing = voiceJob ? ['saving', 'uploading', 'transcribing'].includes(voiceJob.status) : isProcessingVoiceNote(note);
+  const isFailed = voiceJob?.status === 'failed' || isFailedVoiceNote(note);
+  const statusLabel = isFailed ? '확인 필요' : isProcessing ? '정리 중...' : '정리됨';
+  const title = isProcessing ? '방금 말한 생각' : note.ai_title || makeDraftTitle(note.raw_text);
+  const preview = isProcessing ? (voiceJob?.message ?? '전사와 정리를 이어가는 중이에요') : note.ai_summary || makeDraftSummary(note.raw_text);
+
+  return (
+    <Pressable style={[styles.todayMiniCard, isProcessing && styles.todayMiniCardProcessing, isFailed && styles.failedCard]} onPress={onPress}>
+      <View style={styles.todayMiniTopRow}>
+        <Text style={[styles.todayMiniStatus, isProcessing && styles.todayMiniStatusProcessing]}>{statusLabel}</Text>
+        <Text style={styles.todayMiniTime}>{formatDate(note.created_at)}</Text>
+      </View>
+      <Text style={styles.todayMiniTitle} numberOfLines={1}>{title}</Text>
+      <Text style={styles.todayMiniPreview} numberOfLines={2}>{preview}</Text>
+    </Pressable>
   );
 }
 
@@ -4324,72 +4336,87 @@ const styles = StyleSheet.create({
   todayRecorderCard: {
     width: '100%',
     maxWidth: '100%',
-    backgroundColor: '#fffefd',
-    borderColor: '#eee7df',
+    minHeight: 390,
+    backgroundColor: '#fffaf6',
+    borderColor: '#f3e7de',
     borderWidth: 1,
-    borderRadius: 18,
+    borderRadius: 34,
     paddingHorizontal: 22,
-    paddingTop: 18,
-    paddingBottom: 22,
-    gap: 18,
+    paddingTop: 34,
+    paddingBottom: 28,
+    gap: 22,
     alignItems: 'center',
+    justifyContent: 'center',
     overflow: 'visible',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 8 },
+    shadowColor: '#8c4b35',
+    shadowOffset: { width: 0, height: 18 },
     shadowOpacity: 0.08,
-    shadowRadius: 18,
+    shadowRadius: 28,
     elevation: 3,
   },
   todayRecorderCardActive: {
-    backgroundColor: '#fff7f4',
-    borderColor: '#f0b7ad',
+    backgroundColor: '#fff4ef',
+    borderColor: '#f3c3b8',
   },
-  todayRecorderStatusRow: {
-    width: '100%',
-    flexDirection: 'row',
+  todayHeroCopy: {
     alignItems: 'center',
-    justifyContent: 'space-between',
     gap: 10,
+    paddingHorizontal: 6,
   },
-  todayRecorderStatus: {
-    color: '#9a8f82',
-    backgroundColor: '#f5f1eb',
-    borderRadius: 999,
-    paddingHorizontal: 10,
-    paddingVertical: 5,
-    fontSize: 11,
+  todayHeroTitle: {
+    color: '#171412',
+    fontSize: 28,
+    lineHeight: 36,
     fontWeight: '900',
-    overflow: 'hidden',
+    textAlign: 'center',
+    letterSpacing: -0.8,
   },
-  todayRecorderStatusActive: {
-    color: '#fff',
-    backgroundColor: '#f05b49',
+  todayHeroHint: {
+    color: '#8f8578',
+    fontSize: 14,
+    lineHeight: 21,
+    fontWeight: '700',
+    textAlign: 'center',
+  },
+  todayMicButton: {
+    borderRadius: 999,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  todayMicButtonActive: {
+    transform: [{ scale: 0.98 }],
   },
   todayMicHaloOuter: {
-    width: 148,
-    height: 126,
-    borderRadius: 74,
-    backgroundColor: '#fff5f2',
+    width: 188,
+    height: 188,
+    borderRadius: 94,
+    backgroundColor: '#fff0ea',
     alignItems: 'center',
     justifyContent: 'center',
-    paddingBottom: 0,
-    marginTop: 0,
     shadowColor: '#ef6a5a',
-    shadowOffset: { width: 0, height: 10 },
-    shadowOpacity: 0.14,
-    shadowRadius: 18,
-    elevation: 2,
+    shadowOffset: { width: 0, height: 16 },
+    shadowOpacity: 0.2,
+    shadowRadius: 26,
+    elevation: 3,
+  },
+  todayMicHaloOuterActive: {
+    backgroundColor: '#ffe5df',
   },
   todayMicHaloInner: {
-    width: 104,
-    height: 104,
-    borderRadius: 52,
-    backgroundColor: '#ff685a',
+    width: 128,
+    height: 128,
+    borderRadius: 64,
+    backgroundColor: '#ff6257',
     alignItems: 'center',
     justifyContent: 'center',
   },
+  todayMicHaloInnerActive: {
+    backgroundColor: '#ef4f43',
+  },
   todayMicIcon: {
-    fontSize: 43,
+    color: '#fffaf6',
+    fontSize: 48,
+    fontWeight: '900',
   },
   todayRecorderHeaderRow: {
     flexDirection: 'row',
@@ -4415,33 +4442,33 @@ const styles = StyleSheet.create({
   },
   todayRecorderTimer: {
     color: '#171412',
-    backgroundColor: '#e7b76a',
+    backgroundColor: '#ffe7cf',
     borderRadius: 999,
-    paddingHorizontal: 10,
-    paddingVertical: 5,
-    fontSize: 11,
+    paddingHorizontal: 14,
+    paddingVertical: 7,
+    fontSize: 18,
     fontWeight: '900',
     overflow: 'hidden',
     flexShrink: 0,
   },
   todayWaveformRow: {
     width: '100%',
-    height: 46,
+    height: 42,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
     gap: 8,
-    paddingHorizontal: 10,
+    paddingHorizontal: 18,
   },
   todayWaveformBar: {
     flex: 1,
     borderRadius: 999,
-    backgroundColor: '#e8ded5',
-    opacity: 0.95,
+    backgroundColor: '#ef6a5a',
+    opacity: 0.42,
   },
   todayRecorderProgressTrack: {
-    width: '100%',
-    height: 8,
+    width: '82%',
+    height: 5,
     borderRadius: 999,
     backgroundColor: '#f0e8df',
     overflow: 'hidden',
@@ -4450,29 +4477,6 @@ const styles = StyleSheet.create({
     height: '100%',
     borderRadius: 999,
     backgroundColor: '#f06458',
-  },
-  todayRecordButton: {
-    width: '100%',
-    backgroundColor: '#ff6257',
-    borderRadius: 15,
-    paddingVertical: 17,
-    alignItems: 'center',
-    justifyContent: 'center',
-    flexDirection: 'row',
-    gap: 8,
-  },
-  todayRecordButtonActive: {
-    backgroundColor: '#f05b49',
-  },
-  todayRecordButtonIcon: {
-    color: '#fff',
-    fontSize: 14,
-    fontWeight: '900',
-  },
-  todayRecordButtonText: {
-    color: '#fff',
-    fontSize: 15,
-    fontWeight: '900',
   },
   newThoughtReportCta: {
     minHeight: 74,
@@ -4518,9 +4522,10 @@ const styles = StyleSheet.create({
     fontWeight: '800',
   },
   todayRecorderSubtitle: {
-    color: '#d7c7b6',
-    fontSize: 13,
-    lineHeight: 19,
+    color: '#bd5c4f',
+    fontSize: 15,
+    lineHeight: 21,
+    fontWeight: '900',
   },
   mutedActionText: {
     color: '#9b9185',
@@ -5743,6 +5748,94 @@ const styles = StyleSheet.create({
     maxWidth: '100%',
     gap: 14,
     paddingBottom: 106,
+  },
+  todayScrollContent: {
+    width: '100%',
+    maxWidth: '100%',
+    gap: 18,
+    paddingBottom: 112,
+  },
+  todayThoughtSection: {
+    gap: 10,
+    marginTop: 2,
+  },
+  todayThoughtHeader: {
+    paddingHorizontal: 2,
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  todayMiniCard: {
+    backgroundColor: '#ffffff',
+    borderColor: '#f0eeeb',
+    borderWidth: 1,
+    borderRadius: 18,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    gap: 7,
+    shadowColor: '#1e1712',
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.035,
+    shadowRadius: 12,
+    elevation: 1,
+  },
+  todayMiniCardProcessing: {
+    backgroundColor: '#fff8f4',
+    borderColor: '#f5d4c9',
+  },
+  todayMiniTopRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 8,
+  },
+  todayMiniStatus: {
+    color: '#5f6f56',
+    backgroundColor: '#edf4e9',
+    borderRadius: 999,
+    overflow: 'hidden',
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    fontSize: 11,
+    fontWeight: '900',
+  },
+  todayMiniStatusProcessing: {
+    color: '#bd5c4f',
+    backgroundColor: '#ffe9df',
+  },
+  todayMiniTime: {
+    color: '#aaa197',
+    fontSize: 12,
+    fontWeight: '700',
+  },
+  todayMiniTitle: {
+    color: '#171412',
+    fontSize: 15,
+    fontWeight: '900',
+  },
+  todayMiniPreview: {
+    color: '#776e64',
+    fontSize: 13,
+    lineHeight: 18,
+    fontWeight: '600',
+  },
+  todayEmptyCard: {
+    borderRadius: 18,
+    borderWidth: 1,
+    borderColor: '#eee7df',
+    backgroundColor: '#fffefd',
+    padding: 16,
+    gap: 5,
+  },
+  todayEmptyTitle: {
+    color: '#171412',
+    fontSize: 15,
+    fontWeight: '900',
+  },
+  todayEmptyBody: {
+    color: '#8f8578',
+    fontSize: 13,
+    lineHeight: 18,
   },
   pageIntro: {
     gap: 3,
