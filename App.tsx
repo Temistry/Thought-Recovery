@@ -2618,7 +2618,7 @@ function NoteDetail({
   return (
     <Animated.View style={[styles.detailShell, swipeBack.animatedStyle]} {...swipeBack.responder.panHandlers}>
       <View style={styles.detailFixedTopBar}>
-        <AppBackButton label="목록" onPress={onBack} />
+        <AppBackButton label="보관" onPress={onBack} />
         <View style={styles.detailActionRow}>
           <Pressable style={styles.iconActionButton} onPress={() => onTogglePin(note.id)} disabled={saving}>
             <Text style={styles.iconActionText}>{note.is_pinned ? '⌖' : '⌑'}</Text>
@@ -2636,6 +2636,7 @@ function NoteDetail({
         scrollIndicatorInsets={{ bottom: 180 }}
       >
       <View style={styles.detailHero}>
+        <Text style={styles.flowMergedKicker}>원본 생각</Text>
         <CopyableText style={styles.detailTitle} copyValue={note.ai_title || makeDraftTitle(note.raw_text)}>{note.ai_title || makeDraftTitle(note.raw_text)}</CopyableText>
         <View style={styles.noteMetaRow}>
           <View style={styles.noteMetaLeft}>
@@ -2644,7 +2645,10 @@ function NoteDetail({
           </View>
           <Text style={styles.noteDate}>{formatDate(note.created_at)}</Text>
         </View>
-        <CopyableText style={styles.detailSummary} copyValue={note.ai_summary || makeDraftSummary(note.raw_text)}>{note.ai_summary || makeDraftSummary(note.raw_text)}</CopyableText>
+        <View style={styles.originalSummaryCard}>
+          <Text style={styles.originalSummaryLabel}>AI 요약</Text>
+          <CopyableText style={styles.detailSummary} copyValue={note.ai_summary || makeDraftSummary(note.raw_text)}>{note.ai_summary || makeDraftSummary(note.raw_text)}</CopyableText>
+        </View>
         <View style={styles.noteHeroActionRow}>
           <Pressable
             style={[styles.noteRewriteButton, rewriting && styles.disabledButton]}
@@ -2683,12 +2687,12 @@ function NoteDetail({
       {relatedNotes.length ? (
         <View style={styles.rediscoveryBanner}>
           <Text style={styles.rediscoveryBannerKicker}>연결된 생각</Text>
-          <Text style={styles.rediscoveryBannerTitle}>이전에 비슷한 생각을 {relatedNotes.length}개 남겼어요</Text>
+          <Text style={styles.rediscoveryBannerTitle}>이어볼 만한 원본이 {relatedNotes.length}개 있어요</Text>
         </View>
       ) : null}
 
       <View style={styles.detailSection}>
-        <Text style={styles.detailSectionTitle}>연결된 생각</Text>
+        <Text style={styles.detailSectionTitle}>연결된 원본</Text>
         {relatedCandidates.length ? (
           relatedCandidates.map((candidate) => (
             <Pressable key={candidate.note.id} style={styles.relatedItem} onPress={() => onOpenRelated(candidate.note)}>
@@ -2713,7 +2717,7 @@ function NoteDetail({
             </Pressable>
           ))
         ) : (
-          <Text style={styles.emptyInline}>아직 연결된 생각이 없어요.</Text>
+          <Text style={styles.emptyInline}>아직 이어진 원본이 없어요.</Text>
         )}
       </View>
 
@@ -3178,8 +3182,8 @@ function buildThoughtFlows(notes: Note[], feedback: RetrievalFeedbackMap, existi
       sharedProblem,
       sharedIntent,
       sharedDecisionAxis,
-      synthesis: `이 흐름은 서로 코사인 유사도가 높은 메모들이 같은 클러스터로 묶인 결과예요${sharedTermsText}. 중심 문제는 ‘${sharedProblem}’로 읽을 수 있어요.`,
-      whyNow: `최근 메모와 과거 메모가 의미 벡터상 같은 군집에 들어와서, 지금 함께 보면 반복되는 생각의 방향을 확인할 수 있어요.`,
+      synthesis: `이 흐름은 비슷한 표현과 문제의식을 가진 원본들이 함께 모인 정리예요${sharedTermsText}. 중심 문제는 ‘${sharedProblem}’로 읽을 수 있어요.`,
+      whyNow: `최근 메모와 과거 메모를 함께 보면 반복되는 생각의 방향을 확인할 수 있어요.`,
       nextQuestion: `이 연결된 메모들을 하나의 판단이나 다음 행동으로 줄이면 무엇이 남을까?`,
       createdAt: ranked[ranked.length - 1]?.note.created_at ?? now,
       updatedAt: ranked[0]?.note.updated_at ?? ranked[0]?.note.created_at ?? now,
@@ -3578,7 +3582,7 @@ function scoreRelatedNote(source: Note, candidate: Note, feedback: RetrievalFeed
   const userFeedbackScore = feedback[candidate.id]?.status === 'useful' ? 2 + Math.min(3, feedback[candidate.id]?.usedCount ?? 0) : feedback[candidate.id]?.status === 'later' ? 1 : 0;
   const total = semanticSimilarity * 10 + keywordScore + intentScore + problemScore + reusePurposeScore + decisionAxisScore + recencyContextScore + userFeedbackScore;
 
-  if (semanticSimilarity >= 0.28 && sharedTerms.length >= 2) reasons.push(`의미 유사도: ${sharedTerms.slice(0, 4).join(', ')} 표현이 함께 반복됩니다.`);
+  if (semanticSimilarity >= 0.28 && sharedTerms.length >= 2) reasons.push(`${sharedTerms.slice(0, 4).join(', ')} 표현이 함께 반복됩니다.`);
   else if (sharedTerms.length >= 2) reasons.push(`공통 단서: ${sharedTerms.slice(0, 4).join(', ')} 표현을 함께 포함합니다.`);
   if (sharedKeywords.length >= 2 && keywordScore > 0) reasons.push(`같은 주제: ${sharedKeywords.slice(0, 4).join(', ')} 키워드를 공유합니다.`);
   if (intentScore > 0) reasons.push(`같은 의도: 둘 다 ‘${sourceMeaning.intent}’ 메모입니다.`);
@@ -5261,6 +5265,19 @@ const styles = StyleSheet.create({
     color: '#5f554a',
     fontSize: 16,
     lineHeight: 23,
+  },
+  originalSummaryCard: {
+    backgroundColor: '#fffefd',
+    borderColor: '#eee7df',
+    borderWidth: 1,
+    borderRadius: 20,
+    padding: 15,
+    gap: 8,
+  },
+  originalSummaryLabel: {
+    color: '#8f8578',
+    fontSize: 12,
+    fontWeight: '900',
   },
   detailBody: {
     color: '#3b342e',
