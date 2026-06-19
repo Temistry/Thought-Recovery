@@ -2646,10 +2646,6 @@ function NoteDetail({
           </View>
           <Text style={styles.noteDate}>{formatDate(note.created_at)}</Text>
         </View>
-        <View style={styles.originalSummaryCard}>
-          <Text style={styles.originalSummaryLabel}>AI 요약</Text>
-          <CopyableText style={styles.detailSummary} copyValue={note.ai_summary || makeDraftSummary(note.raw_text)}>{note.ai_summary || makeDraftSummary(note.raw_text)}</CopyableText>
-        </View>
         <View style={styles.noteHeroActionRow}>
           <Pressable
             style={[styles.noteRewriteButton, rewriting && styles.disabledButton]}
@@ -2684,43 +2680,6 @@ function NoteDetail({
         onStopVoice={onStopVoice}
         onRetryVoice={onRetryVoice}
       />
-
-      {relatedNotes.length ? (
-        <View style={styles.rediscoveryBanner}>
-          <Text style={styles.rediscoveryBannerKicker}>연결된 생각</Text>
-          <Text style={styles.rediscoveryBannerTitle}>이어볼 만한 원본이 {relatedNotes.length}개 있어요</Text>
-        </View>
-      ) : null}
-
-      <View style={styles.detailSection}>
-        <Text style={styles.detailSectionTitle}>연결된 원본</Text>
-        {relatedCandidates.length ? (
-          relatedCandidates.map((candidate) => (
-            <Pressable key={candidate.note.id} style={styles.relatedItem} onPress={() => onOpenRelated(candidate.note)}>
-              <View style={styles.relatedMetaRow}>
-                <Text style={styles.relatedMeta}>↔ {candidate.meaning.memoryType}</Text>
-                <Text style={styles.relatedMeta}>{formatDate(candidate.note.created_at)}</Text>
-              </View>
-              <CopyableText
-                style={styles.relatedTitle}
-                numberOfLines={1}
-                copyValue={candidate.note.ai_title || makeDraftTitle(candidate.note.raw_text)}
-              >
-                {candidate.note.ai_title || makeDraftTitle(candidate.note.raw_text)}
-              </CopyableText>
-              <CopyableText
-                style={styles.relatedBody}
-                numberOfLines={2}
-                copyValue={candidate.reasons[0] ?? candidate.note.raw_text}
-              >
-                {candidate.reasons[0] ?? candidate.note.raw_text}
-              </CopyableText>
-            </Pressable>
-          ))
-        ) : (
-          <Text style={styles.emptyInline}>아직 이어진 원본이 없어요.</Text>
-        )}
-      </View>
 
       <View style={styles.threadSection}>
         <View style={styles.threadHeaderRow}>
@@ -2771,6 +2730,48 @@ function NoteDetail({
         ) : null}
       </View>
 
+
+      <View style={styles.originalSummaryCard}>
+        <Text style={styles.originalSummaryLabel}>AI 요약</Text>
+        <CopyableText style={styles.detailSummary} copyValue={note.ai_summary || makeDraftSummary(note.raw_text)}>{note.ai_summary || makeDraftSummary(note.raw_text)}</CopyableText>
+      </View>
+
+      {relatedNotes.length ? (
+        <View style={styles.rediscoveryBanner}>
+          <Text style={styles.rediscoveryBannerKicker}>연결된 생각</Text>
+          <Text style={styles.rediscoveryBannerTitle}>이어볼 만한 원본이 {relatedNotes.length}개 있어요</Text>
+        </View>
+      ) : null}
+
+      <View style={styles.detailSection}>
+        <Text style={styles.detailSectionTitle}>연결된 원본</Text>
+        {relatedCandidates.length ? (
+          relatedCandidates.map((candidate) => (
+            <Pressable key={candidate.note.id} style={styles.relatedItem} onPress={() => onOpenRelated(candidate.note)}>
+              <View style={styles.relatedMetaRow}>
+                <Text style={styles.relatedMeta}>↔ {candidate.meaning.memoryType}</Text>
+                <Text style={styles.relatedMeta}>{formatDate(candidate.note.created_at)}</Text>
+              </View>
+              <CopyableText
+                style={styles.relatedTitle}
+                numberOfLines={1}
+                copyValue={candidate.note.ai_title || makeDraftTitle(candidate.note.raw_text)}
+              >
+                {candidate.note.ai_title || makeDraftTitle(candidate.note.raw_text)}
+              </CopyableText>
+              <CopyableText
+                style={styles.relatedBody}
+                numberOfLines={2}
+                copyValue={candidate.reasons[0] ?? candidate.note.raw_text}
+              >
+                {candidate.reasons[0] ?? candidate.note.raw_text}
+              </CopyableText>
+            </Pressable>
+          ))
+        ) : (
+          <Text style={styles.emptyInline}>아직 이어진 원본이 없어요.</Text>
+        )}
+      </View>
       </ScrollView>
     </Animated.View>
   );
@@ -5023,10 +5024,14 @@ const styles = StyleSheet.create({
     padding: 12,
   },
   noteAudioBlock: {
-    backgroundColor: '#ef6a5a',
-    borderRadius: 22,
+    backgroundColor: UI_THEME.color.coral,
+    borderRadius: UI_THEME.radius.lg,
     padding: 16,
     gap: 13,
+    shadowColor: UI_THEME.color.coralDeep,
+    shadowOffset: { width: 0, height: 10 },
+    shadowOpacity: 0.12,
+    shadowRadius: 18,
   },
   noteAudioTopRow: {
     flexDirection: 'row',
@@ -5238,9 +5243,9 @@ const styles = StyleSheet.create({
     fontWeight: '900',
   },
   detailHero: {
-    backgroundColor: '#fffdfb',
+    backgroundColor: UI_THEME.color.appBg,
     paddingTop: 8,
-    paddingBottom: 16,
+    paddingBottom: 12,
     gap: 12,
   },
   detailTypeBanner: {
@@ -5319,12 +5324,13 @@ const styles = StyleSheet.create({
     lineHeight: 23,
   },
   originalSummaryCard: {
-    backgroundColor: '#fffefd',
-    borderColor: '#eee7df',
+    backgroundColor: UI_THEME.color.surface,
+    borderColor: UI_THEME.color.border,
     borderWidth: 1,
-    borderRadius: 20,
-    padding: 15,
+    borderRadius: UI_THEME.radius.lg,
+    padding: 16,
     gap: 8,
+    ...UI_THEME.shadow.card,
   },
   originalSummaryLabel: {
     color: '#8f8578',
@@ -5516,9 +5522,13 @@ const styles = StyleSheet.create({
     paddingTop: 4,
   },
   threadSection: {
+    backgroundColor: UI_THEME.color.surface,
+    borderColor: UI_THEME.color.border,
+    borderWidth: 1,
+    borderRadius: UI_THEME.radius.lg,
+    padding: 16,
     gap: 8,
-    paddingTop: 4,
-    paddingBottom: 4,
+    ...UI_THEME.shadow.card,
   },
   threadHeaderRow: {
     flexDirection: 'row',
@@ -5580,12 +5590,13 @@ const styles = StyleSheet.create({
     marginTop: -2,
   },
   detailSection: {
-    backgroundColor: '#fff',
-    borderColor: '#eee7df',
+    backgroundColor: UI_THEME.color.surface,
+    borderColor: UI_THEME.color.border,
     borderWidth: 1,
-    borderRadius: 20,
+    borderRadius: UI_THEME.radius.lg,
     padding: 16,
     gap: 10,
+    ...UI_THEME.shadow.card,
   },
   detailSectionHeader: {
     flexDirection: 'row',
@@ -6074,12 +6085,13 @@ const styles = StyleSheet.create({
     fontWeight: '800',
   },
   searchCardCompact: {
-    backgroundColor: '#fffefd',
-    borderColor: '#eee7df',
+    backgroundColor: UI_THEME.color.surface,
+    borderColor: UI_THEME.color.border,
     borderWidth: 1,
-    borderRadius: 20,
+    borderRadius: UI_THEME.radius.lg,
     paddingHorizontal: 4,
     paddingVertical: 4,
+    ...UI_THEME.shadow.card,
   },
   retrievalHeroTopRow: {
     flexDirection: 'row',
@@ -6130,8 +6142,8 @@ const styles = StyleSheet.create({
     paddingHorizontal: 2,
   },
   archiveDateTitle: {
-    color: '#171412',
-    fontSize: 16,
+    color: UI_THEME.color.text,
+    fontSize: 17,
     fontWeight: '900',
   },
   archiveDateCount: {
@@ -6140,18 +6152,14 @@ const styles = StyleSheet.create({
     fontWeight: '800',
   },
   archiveOriginalCard: {
-    backgroundColor: '#ffffff',
-    borderColor: '#f0eeeb',
+    backgroundColor: UI_THEME.color.surface,
+    borderColor: UI_THEME.color.border,
     borderWidth: 1,
-    borderRadius: 18,
-    paddingHorizontal: 14,
-    paddingVertical: 12,
-    gap: 7,
-    shadowColor: '#1e1712',
-    shadowOffset: { width: 0, height: 6 },
-    shadowOpacity: 0.035,
-    shadowRadius: 12,
-    elevation: 1,
+    borderRadius: UI_THEME.radius.lg,
+    paddingHorizontal: 15,
+    paddingVertical: 13,
+    gap: 8,
+    ...UI_THEME.shadow.card,
   },
   archiveOriginalMetaRow: {
     flexDirection: 'row',
@@ -6160,9 +6168,9 @@ const styles = StyleSheet.create({
     gap: 10,
   },
   archiveOriginalSource: {
-    color: '#7c5c2e',
-    backgroundColor: '#efe4d4',
-    borderRadius: 999,
+    color: UI_THEME.color.goldText,
+    backgroundColor: UI_THEME.color.goldSoft,
+    borderRadius: UI_THEME.radius.pill,
     overflow: 'hidden',
     paddingHorizontal: 8,
     paddingVertical: 3,
