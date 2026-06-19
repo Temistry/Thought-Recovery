@@ -1,6 +1,5 @@
 import { StatusBar } from 'expo-status-bar';
 import { Audio, InterruptionModeAndroid, InterruptionModeIOS } from 'expo-av';
-import { ExpoSpeechRecognitionModule } from 'expo-speech-recognition/build/ExpoSpeechRecognitionModule';
 import type {
   ExpoSpeechRecognitionErrorEvent,
   ExpoSpeechRecognitionResultEvent,
@@ -47,6 +46,24 @@ const ARCHIVE_PAGE_SIZE = 24;
 const THOUGHT_FLOW_FINGERPRINT_KEY = 'idea-second-brain:thought-flow-fingerprint:v1';
 const SCREEN_WIDTH = Dimensions.get('window').width;
 const MAX_RECORDING_MS = 20 * 60 * 1000;
+
+type SpeechRecognitionModule = typeof import('expo-speech-recognition/build/ExpoSpeechRecognitionModule').ExpoSpeechRecognitionModule;
+
+declare const require: (moduleName: string) => { ExpoSpeechRecognitionModule: SpeechRecognitionModule };
+
+let speechRecognitionModuleCache: SpeechRecognitionModule | null | undefined;
+
+function getSpeechRecognitionModule() {
+  if (speechRecognitionModuleCache !== undefined) return speechRecognitionModuleCache;
+
+  try {
+    speechRecognitionModuleCache = require('expo-speech-recognition/build/ExpoSpeechRecognitionModule').ExpoSpeechRecognitionModule;
+  } catch (error) {
+    speechRecognitionModuleCache = null;
+  }
+
+  return speechRecognitionModuleCache;
+}
 
 async function setExclusiveAudioModeAsync(allowsRecordingIOS: boolean) {
   await Audio.setAudioModeAsync({
@@ -636,15 +653,21 @@ export default function App() {
 
   async function startBasicTranscription() {
     if (basicTranscriptionRef.current.active || recordingRef.current || stoppingRecordingRef.current) return;
+    const speechRecognition = getSpeechRecognitionModule();
+    if (!speechRecognition) {
+      await startRecording();
+      return;
+    }
+
     try {
-      const available = ExpoSpeechRecognitionModule.isRecognitionAvailable();
+      const available = speechRecognition.isRecognitionAvailable();
       if (!available) {
         Alert.alert('기본 전사 사용 불가', '이 기기에서 기본 음성 인식을 사용할 수 없어요. 기존 녹음 저장으로 진행합니다.');
         await startRecording();
         return;
       }
 
-      const permission = await ExpoSpeechRecognitionModule.requestPermissionsAsync();
+      const permission = await speechRecognition.requestPermissionsAsync();
       if (!permission.granted) {
         Alert.alert('음성 인식 권한 필요', '기본 전사를 위해 마이크와 음성 인식 권한을 허용해주세요.');
         return;
@@ -654,7 +677,7 @@ export default function App() {
       basicTranscriptionRef.current = { active: true, transcript: '', audioUri: null, startedAt: Date.now() };
       setBasicTranscriptionActive(true);
       setRecordingElapsedMs(0);
-      ExpoSpeechRecognitionModule.start({
+      speechRecognition.start({
         lang: 'ko-KR',
         interimResults: true,
         continuous: true,
@@ -677,7 +700,12 @@ export default function App() {
     if (!basicTranscriptionRef.current.active || stoppingRecordingRef.current) return;
     stoppingRecordingRef.current = true;
     try {
-      ExpoSpeechRecognitionModule.stop();
+      const speechRecognition = getSpeechRecognitionModule();
+      if (speechRecognition) {
+        speechRecognition.stop();
+      } else {
+        await finishBasicTranscriptionCapture();
+      }
     } catch (error) {
       await finishBasicTranscriptionCapture();
     } finally {
@@ -722,19 +750,22 @@ export default function App() {
   }
 
   useEffect(() => {
-    const resultSubscription = ExpoSpeechRecognitionModule.addListener('result', (event: ExpoSpeechRecognitionResultEvent) => {
+    const speechRecognition = getSpeechRecognitionModule();
+    if (!speechRecognition) return undefined;
+
+    const resultSubscription = speechRecognition.addListener('result', (event: ExpoSpeechRecognitionResultEvent) => {
       const transcript = event.results[0]?.transcript?.trim();
       if (!transcript) return;
       basicTranscriptionRef.current = { ...basicTranscriptionRef.current, transcript };
     });
-    const audioEndSubscription = ExpoSpeechRecognitionModule.addListener('audioend', (event: { uri: string | null }) => {
+    const audioEndSubscription = speechRecognition.addListener('audioend', (event: { uri: string | null }) => {
       if (event.uri) basicTranscriptionRef.current = { ...basicTranscriptionRef.current, audioUri: event.uri };
     });
-    const errorSubscription = ExpoSpeechRecognitionModule.addListener('error', (event: ExpoSpeechRecognitionErrorEvent) => {
+    const errorSubscription = speechRecognition.addListener('error', (event: ExpoSpeechRecognitionErrorEvent) => {
       if (!basicTranscriptionRef.current.active) return;
       void finishBasicTranscriptionCapture(event.message || event.error);
     });
-    const endSubscription = ExpoSpeechRecognitionModule.addListener('end', () => {
+    const endSubscription = speechRecognition.addListener('end', () => {
       if (!basicTranscriptionRef.current.active) return;
       void finishBasicTranscriptionCapture();
     });
