@@ -1,7 +1,10 @@
 import { StatusBar } from 'expo-status-bar';
 import { Audio, InterruptionModeAndroid, InterruptionModeIOS } from 'expo-av';
-import { ExpoSpeechRecognitionModule } from 'expo-speech-recognition';
-import type { ExpoSpeechRecognitionErrorEvent, ExpoSpeechRecognitionResultEvent } from 'expo-speech-recognition';
+import { ExpoSpeechRecognitionModule } from 'expo-speech-recognition/build/ExpoSpeechRecognitionModule';
+import type {
+  ExpoSpeechRecognitionErrorEvent,
+  ExpoSpeechRecognitionResultEvent,
+} from 'expo-speech-recognition/build/ExpoSpeechRecognitionModule.types';
 import * as Clipboard from 'expo-clipboard';
 import * as FileSystem from 'expo-file-system/legacy';
 import * as Haptics from 'expo-haptics';
