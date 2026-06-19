@@ -1,4 +1,4 @@
-﻿import { StatusBar } from 'expo-status-bar';
+import { StatusBar } from 'expo-status-bar';
 import { Audio, InterruptionModeAndroid, InterruptionModeIOS } from 'expo-av';
 import * as Clipboard from 'expo-clipboard';
 import * as FileSystem from 'expo-file-system/legacy';
@@ -2009,6 +2009,7 @@ function ThoughtFlowCard({
 }) {
   const hasDraftBody = flow.mergedDraft.body.trim().length > 0;
   const summary = getThoughtReportSummary(flow);
+  const statusLabel = hasDraftBody ? '정식 흐름' : '정리 전';
 
   function generateWithoutOpening(event: GestureResponderEvent) {
     event.stopPropagation();
@@ -2017,29 +2018,29 @@ function ThoughtFlowCard({
   }
 
   return (
-    <SpringPressable style={styles.thoughtReportCard} onPress={() => onOpenFlow(flow)} accessibilityLabel={`${flow.title} 자라난 생각 리포트 열기`}>
+    <SpringPressable style={[styles.thoughtReportCard, !hasDraftBody && styles.thoughtReportCardPending]} onPress={() => onOpenFlow(flow)} accessibilityLabel={`${flow.title} 흐름 열기`}>
       <View style={styles.thoughtReportHeader}>
-        <View style={styles.thoughtReportSeed}>
-          <Text style={styles.thoughtReportSeedText}>🌱</Text>
-        </View>
         <View style={styles.thoughtReportHeaderText}>
-          <Text style={styles.thoughtReportKicker}>자라난 생각 리포트</Text>
+          <View style={styles.flowStatusRow}>
+            <Text style={[styles.flowStatusPill, hasDraftBody ? styles.flowStatusPillReady : styles.flowStatusPillPending]}>{statusLabel}</Text>
+          </View>
           <Text style={styles.thoughtReportTitle} numberOfLines={2}>{flow.title}</Text>
         </View>
       </View>
 
       {hasDraftBody ? (
         <>
-          <Text style={styles.thoughtReportSummary} numberOfLines={5}>{summary}</Text>
+          <Text style={styles.thoughtReportSummary} numberOfLines={4}>{summary}</Text>
           <View style={styles.nextQuestionCard}>
             <Text style={styles.nextQuestionLabel}>다음 질문</Text>
             <Text style={styles.nextQuestionBody} numberOfLines={2}>{flow.nextQuestion}</Text>
           </View>
         </>
       ) : (
-        <View style={styles.draftLoadingBox}>
-          <Text style={styles.flowSectionHint}>아직 정리본이 없어요. 필요할 때 AI가 이 흐름을 내부 정리본으로 만들어둘게요.</Text>
-          <Pressable style={[styles.primaryButton, generationState?.loading && styles.disabledButton]} onPress={generateWithoutOpening} disabled={generationState?.loading}>
+        <View style={styles.flowPendingBox}>
+          <Text style={styles.flowPendingTitle}>아직 정리본이 없어요</Text>
+          <Text style={styles.flowSectionHint}>버튼을 누르면 AI가 백그라운드에서 정리해서 이 흐름 안에 채워둘게요.</Text>
+          <Pressable style={[styles.flowPrimaryButton, generationState?.loading && styles.disabledButton]} onPress={generateWithoutOpening} disabled={generationState?.loading}>
             <Text style={styles.primaryButtonText}>{generationState?.loading ? '정리 중...' : '생각 정리하기'}</Text>
           </Pressable>
           {generationState?.error ? <Text style={styles.voiceErrorText}>{generationState.error}</Text> : null}
@@ -6053,6 +6054,10 @@ const styles = StyleSheet.create({
     shadowRadius: 18,
     shadowOffset: { width: 0, height: 10 },
   },
+  thoughtReportCardPending: {
+    backgroundColor: '#fffaf6',
+    borderColor: '#f3e7de',
+  },
   thoughtReportHeader: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -6080,6 +6085,27 @@ const styles = StyleSheet.create({
     color: '#e06458',
     fontSize: 11,
     fontWeight: '900',
+  },
+  flowStatusRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  flowStatusPill: {
+    alignSelf: 'flex-start',
+    borderRadius: 999,
+    overflow: 'hidden',
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    fontSize: 11,
+    fontWeight: '900',
+  },
+  flowStatusPillReady: {
+    color: '#5f6f56',
+    backgroundColor: '#edf4e9',
+  },
+  flowStatusPillPending: {
+    color: '#bd5c4f',
+    backgroundColor: '#ffe9df',
   },
   thoughtReportTitle: {
     color: '#151311',
@@ -6192,6 +6218,24 @@ const styles = StyleSheet.create({
     fontSize: 14,
     lineHeight: 20,
     fontWeight: '800',
+  },
+  flowPendingBox: {
+    borderRadius: 20,
+    backgroundColor: '#fbfaf7',
+    padding: 14,
+    gap: 10,
+  },
+  flowPendingTitle: {
+    color: '#171412',
+    fontSize: 15,
+    fontWeight: '900',
+  },
+  flowPrimaryButton: {
+    width: '100%',
+    backgroundColor: '#ef6a5a',
+    borderRadius: 14,
+    paddingVertical: 13,
+    alignItems: 'center',
   },
   reportEvidenceRow: {
     flexDirection: 'row',
