@@ -7,7 +7,11 @@
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
     "ios": {
-      "supportsTablet": true
+      "supportsTablet": true,
+      "infoPlist": {
+        "NSSpeechRecognitionUsageDescription": "생각을 기본 전사로 기록하기 위해 음성 인식을 사용합니다.",
+        "NSMicrophoneUsageDescription": "음성 메모를 녹음하고 전사하기 위해 마이크를 사용합니다."
+      }
     },
     "android": {
       "adaptiveIcon": {
@@ -22,7 +26,15 @@
       "favicon": "./assets/favicon.png"
     },
     "plugins": [
-      "expo-sqlite"
+      "expo-sqlite",
+      [
+        "expo-speech-recognition",
+        {
+          "microphonePermission": "생각을 음성 메모로 남기기 위해 마이크를 사용합니다.",
+          "speechRecognitionPermission": "말한 내용을 기본 전사로 바꾸기 위해 음성 인식을 사용합니다.",
+          "androidSpeechServicePackages": ["com.google.android.googlequicksearchbox"]
+        }
+      ]
     ]
   }
 }

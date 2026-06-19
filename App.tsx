@@ -1,5 +1,7 @@
 import { StatusBar } from 'expo-status-bar';
 import { Audio, InterruptionModeAndroid, InterruptionModeIOS } from 'expo-av';
+import { ExpoSpeechRecognitionModule } from 'expo-speech-recognition';
+import type { ExpoSpeechRecognitionErrorEvent, ExpoSpeechRecognitionResultEvent } from 'expo-speech-recognition';
 import * as Clipboard from 'expo-clipboard';
 import * as FileSystem from 'expo-file-system/legacy';
 import * as Haptics from 'expo-haptics';
@@ -163,6 +165,7 @@ export default function App() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [recording, setRecording] = useState<Audio.Recording | null>(null);
+  const [basicTranscriptionActive, setBasicTranscriptionActive] = useState(false);
   const [recordingElapsedMs, setRecordingElapsedMs] = useState(0);
   const [activeTab, setActiveTab] = useState<AppTab>('today');
   const [selectedNoteId, setSelectedNoteId] = useState<string | null>(null);
@@ -187,12 +190,14 @@ export default function App() {
   const routingInFlightRef = useRef(false);
   const recordingRef = useRef<Audio.Recording | null>(null);
   const stoppingRecordingRef = useRef(false);
+  const basicTranscriptionRef = useRef({ active: false, transcript: '', audioUri: null as string | null, startedAt: 0 });
   const playbackSoundRef = useRef<Audio.Sound | null>(null);
 
   const cloudMode = isSupabaseConfigured && supabase !== null;
   const canUseCloud = cloudMode && !!session?.user;
   const userEmail = session?.user?.email ?? '';
   const userInitial = userEmail.trim().charAt(0).toUpperCase() || '나';
+  const isCapturingVoice = !!recording || basicTranscriptionActive;
 
   const statusLabel = useMemo(() => {
     if (!cloudMode) return '로컬 테스트 중';
@@ -544,6 +549,19 @@ export default function App() {
     }
   }
 
+  async function toggleVoiceCapture() {
+    if (isCapturingVoice) {
+      if (basicTranscriptionRef.current.active) {
+        await stopBasicTranscription();
+        return;
+      }
+      await stopRecording();
+      return;
+    }
+
+    await startBasicTranscription();
+  }
+
   async function startRecording() {
     if (recordingRef.current || stoppingRecordingRef.current) return;
     try {
@@ -613,10 +631,133 @@ export default function App() {
     }
   }
 
+  async function startBasicTranscription() {
+    if (basicTranscriptionRef.current.active || recordingRef.current || stoppingRecordingRef.current) return;
+    try {
+      const available = ExpoSpeechRecognitionModule.isRecognitionAvailable();
+      if (!available) {
+        Alert.alert('기본 전사 사용 불가', '이 기기에서 기본 음성 인식을 사용할 수 없어요. 기존 녹음 저장으로 진행합니다.');
+        await startRecording();
+        return;
+      }
+
+      const permission = await ExpoSpeechRecognitionModule.requestPermissionsAsync();
+      if (!permission.granted) {
+        Alert.alert('음성 인식 권한 필요', '기본 전사를 위해 마이크와 음성 인식 권한을 허용해주세요.');
+        return;
+      }
+
+      await stopOriginalAudio();
+      basicTranscriptionRef.current = { active: true, transcript: '', audioUri: null, startedAt: Date.now() };
+      setBasicTranscriptionActive(true);
+      setRecordingElapsedMs(0);
+      ExpoSpeechRecognitionModule.start({
+        lang: 'ko-KR',
+        interimResults: true,
+        continuous: true,
+        addsPunctuation: true,
+        iosTaskHint: 'dictation',
+        recordingOptions: {
+          persist: true,
+          outputFileName: `basic-transcription-${Date.now()}.caf`,
+        },
+      });
+    } catch (error) {
+      basicTranscriptionRef.current = { active: false, transcript: '', audioUri: null, startedAt: 0 };
+      setBasicTranscriptionActive(false);
+      setRecordingElapsedMs(0);
+      showError('기본 전사 시작 실패', error);
+    }
+  }
+
+  async function stopBasicTranscription() {
+    if (!basicTranscriptionRef.current.active || stoppingRecordingRef.current) return;
+    stoppingRecordingRef.current = true;
+    try {
+      ExpoSpeechRecognitionModule.stop();
+    } catch (error) {
+      await finishBasicTranscriptionCapture();
+    } finally {
+      stoppingRecordingRef.current = false;
+    }
+  }
+
+  async function finishBasicTranscriptionCapture(errorMessage?: string) {
+    const current = basicTranscriptionRef.current;
+    if (!current.active) return;
+
+    const durationMs = current.startedAt ? Date.now() - current.startedAt : recordingElapsedMs;
+    const transcript = current.transcript.trim();
+    const audioUri = current.audioUri;
+    basicTranscriptionRef.current = { active: false, transcript: '', audioUri: null, startedAt: 0 };
+    setBasicTranscriptionActive(false);
+    setRecordingElapsedMs(0);
+
+    const rawText = transcript || (errorMessage ? '기본 전사에 실패했지만 음성은 저장했어요.' : '기본 전사 결과가 비어 있어요.');
+    const note = await createNote(rawText, 'voice', audioUri, durationMs || null);
+    if (!note) return;
+
+    const basicPatch = transcript
+      ? {
+          ai_title: makeDraftTitle(transcript),
+          ai_summary: 'iOS 기본 음성 인식으로 만든 기본 전사입니다.',
+          ai_tags: inferTagsFromText(transcript, 'voice'),
+        }
+      : {
+          ai_title: '기본 전사 확인 필요',
+          ai_summary: errorMessage ?? '기본 전사 결과가 비어 있어요. 원본 음성을 듣고 직접 수정할 수 있습니다.',
+          ai_tags: ['음성', '전사 확인'],
+        };
+
+    const updated = await updateLocalNote(note.id, basicPatch).catch(() => null);
+    setNotes((prev) => prev.map((item) => (item.id === note.id ? { ...item, ...basicPatch, ...(updated ?? {}) } : item)));
+
+    if (note && audioUri && canUseCloud) {
+      setVoiceJob(note.id, 'transcribing', 'Pro AI 전사도 이어서 확인하는 중');
+      await uploadAndTranscribeVoice(note.id, audioUri);
+    }
+  }
+
   useEffect(() => {
-    if (!recording) return;
+    const resultSubscription = ExpoSpeechRecognitionModule.addListener('result', (event: ExpoSpeechRecognitionResultEvent) => {
+      const transcript = event.results[0]?.transcript?.trim();
+      if (!transcript) return;
+      basicTranscriptionRef.current = { ...basicTranscriptionRef.current, transcript };
+    });
+    const audioEndSubscription = ExpoSpeechRecognitionModule.addListener('audioend', (event: { uri: string | null }) => {
+      if (event.uri) basicTranscriptionRef.current = { ...basicTranscriptionRef.current, audioUri: event.uri };
+    });
+    const errorSubscription = ExpoSpeechRecognitionModule.addListener('error', (event: ExpoSpeechRecognitionErrorEvent) => {
+      if (!basicTranscriptionRef.current.active) return;
+      void finishBasicTranscriptionCapture(event.message || event.error);
+    });
+    const endSubscription = ExpoSpeechRecognitionModule.addListener('end', () => {
+      if (!basicTranscriptionRef.current.active) return;
+      void finishBasicTranscriptionCapture();
+    });
+
+    return () => {
+      resultSubscription.remove();
+      audioEndSubscription.remove();
+      errorSubscription.remove();
+      endSubscription.remove();
+    };
+  }, [canUseCloud]);
+
+  useEffect(() => {
+    if (!recording && !basicTranscriptionActive) return;
     let cancelled = false;
     const timer = setInterval(() => {
+      if (basicTranscriptionActive) {
+        const startedAt = basicTranscriptionRef.current.startedAt;
+        const durationMs = startedAt ? Date.now() - startedAt : 0;
+        setRecordingElapsedMs(durationMs);
+        if (durationMs >= MAX_RECORDING_MS) {
+          void stopBasicTranscription();
+        }
+        return;
+      }
+
       const current = recordingRef.current;
       if (!current || stoppingRecordingRef.current) return;
       current.getStatusAsync()
@@ -634,7 +775,7 @@ export default function App() {
       cancelled = true;
       clearInterval(timer);
     };
-  }, [recording]);
+  }, [recording, basicTranscriptionActive]);
 
   async function updateNoteText(noteId: string, nextText: string) {
     const trimmed = nextText.trim();
@@ -1211,11 +1352,11 @@ export default function App() {
       <ScrollView contentContainerStyle={styles.todayScrollContent}>
         <AppTopBar title="오늘" />
         <TodayRecorderCard
-          recording={!!recording}
+          recording={isCapturingVoice}
           saving={saving}
           recordingElapsedMs={recordingElapsedMs}
           maxRecordingMs={MAX_RECORDING_MS}
-          onToggleRecording={recording ? stopRecording : startRecording}
+          onToggleRecording={toggleVoiceCapture}
         />
 
         <View style={styles.todayThoughtSection}>
@@ -1513,9 +1654,9 @@ export default function App() {
 
         {showFloatingCapture ? (
           <FloatingCaptureBar
-            recording={!!recording}
+            recording={isCapturingVoice}
             saving={saving}
-            onToggleRecording={recording ? stopRecording : startRecording}
+            onToggleRecording={toggleVoiceCapture}
           />
         ) : null}
         {(cloudMode && !session) || selectedNote || selectedThoughtFlow || showTrash || showAccount ? null : <BottomTabs activeTab={activeTab} onChange={changeTab} />}
