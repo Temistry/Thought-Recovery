@@ -26,6 +26,7 @@ import {
   TextInput,
   View,
 } from 'react-native';
+import type { GestureResponderEvent } from 'react-native';
 import type { Session } from '@supabase/supabase-js';
 
 import { createLocalNote, deleteLocalTrashNote, listCachedThoughtFlows, listLocalNotes, listLocalTrashNotes, listRecentLocalNotes, moveLocalNoteToTrash, readCachedThoughtFingerprint, readLocalKeyValue, rebuildCachedThoughtFingerprint, replaceCachedThoughtFlows, replaceLocalNotes, restoreLocalTrashNote, searchLocalNotes, updateLocalNote, writeLocalKeyValue } from './src/lib/localNotes';
@@ -210,12 +211,13 @@ export default function App() {
   const thoughtFlowFingerprint = useMemo(() => computeThoughtFlowFingerprint(feedNotes, retrievalFeedback), [feedNotes, retrievalFeedback]);
   const retrievalSections = useMemo(() => buildRetrievalSections(feedNotes, retrievalFeedback), [feedNotes, retrievalFeedback]);
   const visibleThoughtFlows = retrievalSections.thoughtFlows.length > 0 ? retrievalSections.thoughtFlows : cachedThoughtFlows;
+  const visibleThoughtFlowsWithDrafts = useMemo(
+    () => visibleThoughtFlows.map((flow) => generatedDrafts[flow.id] ? { ...flow, mergedDraft: generatedDrafts[flow.id] } : flow),
+    [visibleThoughtFlows, generatedDrafts],
+  );
   const selectedThoughtFlow = useMemo(() => {
-    const flow = visibleThoughtFlows.find((item) => item.id === selectedThoughtFlowId) ?? null;
-    if (!flow) return null;
-    const generatedDraft = generatedDrafts[flow.id];
-    return generatedDraft ? { ...flow, mergedDraft: generatedDraft } : flow;
-  }, [visibleThoughtFlows, selectedThoughtFlowId, generatedDrafts]);
+    return visibleThoughtFlowsWithDrafts.find((item) => item.id === selectedThoughtFlowId) ?? null;
+  }, [visibleThoughtFlowsWithDrafts, selectedThoughtFlowId]);
   const selectedNote = useMemo(
     () => selectedNoteOverride ?? notes.find((note) => note.id === selectedNoteId) ?? null,
     [notes, selectedNoteId, selectedNoteOverride],
@@ -1203,9 +1205,11 @@ export default function App() {
         </View>
 
         <ThoughtFlowSection
-          flows={visibleThoughtFlows}
+          flows={visibleThoughtFlowsWithDrafts}
           onOpenFlow={openThoughtFlow}
           onOpenNote={openNote}
+          onGenerateDraft={generateMergedThoughtDraft}
+          generationState={draftGenerationState}
           emptyText="아직 자라난 생각을 만들 만큼 이어진 메모가 부족해요. 메모를 조금 더 남기면 생각 리포트가 생겨요."
         />
       </ScrollView>
@@ -1916,6 +1920,8 @@ function ThoughtFlowSection({
   flows,
   onOpenFlow,
   onOpenNote,
+  onGenerateDraft,
+  generationState,
   title = '',
   hint = '',
   emptyText,
@@ -1923,6 +1929,8 @@ function ThoughtFlowSection({
   flows: ThoughtFlow[];
   onOpenFlow: (flow: ThoughtFlow) => void;
   onOpenNote: (note: Note) => void;
+  onGenerateDraft: (flow: ThoughtFlow) => Promise<void>;
+  generationState: Record<string, { loading: boolean; error?: string }>;
   title?: string;
   hint?: string;
   emptyText?: string;
@@ -1947,7 +1955,14 @@ function ThoughtFlowSection({
   return (
     <View style={styles.retrievalSection}>
       {flows.map((flow) => (
-        <ThoughtFlowCard key={flow.id} flow={flow} onOpenFlow={onOpenFlow} onOpenNote={onOpenNote} />
+        <ThoughtFlowCard
+          key={flow.id}
+          flow={flow}
+          onOpenFlow={onOpenFlow}
+          onOpenNote={onOpenNote}
+          onGenerateDraft={onGenerateDraft}
+          generationState={generationState[flow.id]}
+        />
       ))}
     </View>
   );
@@ -1956,12 +1971,23 @@ function ThoughtFlowSection({
 function ThoughtFlowCard({
   flow,
   onOpenFlow,
+  onGenerateDraft,
+  generationState,
 }: {
   flow: ThoughtFlow;
   onOpenFlow: (flow: ThoughtFlow) => void;
   onOpenNote: (note: Note) => void;
+  onGenerateDraft: (flow: ThoughtFlow) => Promise<void>;
+  generationState?: { loading: boolean; error?: string };
 }) {
-  const report = buildReadableThoughtReport(flow);
+  const hasDraftBody = flow.mergedDraft.body.trim().length > 0;
+  const summary = getThoughtReportSummary(flow);
+
+  function generateWithoutOpening(event: GestureResponderEvent) {
+    event.stopPropagation();
+    void Haptics.selectionAsync().catch(() => undefined);
+    void onGenerateDraft(flow);
+  }
 
   return (
     <SpringPressable style={styles.thoughtReportCard} onPress={() => onOpenFlow(flow)} accessibilityLabel={`${flow.title} 자라난 생각 리포트 열기`}>
@@ -1975,25 +2001,23 @@ function ThoughtFlowCard({
         </View>
       </View>
 
-      <Text style={styles.thoughtReportSummary} numberOfLines={4}>{report.summary}</Text>
-
-      <View style={styles.thoughtReportTimeline}>
-        <ReportStage label="처음" body={report.firstProblem} />
-        <ReportStage label="반복" body={report.repeatedConcern} />
-        <ReportStage label="현재" body={report.currentConclusion} />
-      </View>
-
-      <SixWAnswerPanel items={report.sixW} compact />
-
-      <View style={styles.nextQuestionCard}>
-        <Text style={styles.nextQuestionLabel}>다음 질문</Text>
-        <Text style={styles.nextQuestionBody} numberOfLines={2}>{flow.nextQuestion}</Text>
-      </View>
-
-      <View style={styles.reportEvidenceRow}>
-        <Text style={styles.reportEvidenceText}>근거 원문 {flow.notes.length}개</Text>
-        <Text style={styles.reportOpenText}>읽기 ›</Text>
-      </View>
+      {hasDraftBody ? (
+        <>
+          <Text style={styles.thoughtReportSummary} numberOfLines={5}>{summary}</Text>
+          <View style={styles.nextQuestionCard}>
+            <Text style={styles.nextQuestionLabel}>다음 질문</Text>
+            <Text style={styles.nextQuestionBody} numberOfLines={2}>{flow.nextQuestion}</Text>
+          </View>
+        </>
+      ) : (
+        <View style={styles.draftLoadingBox}>
+          <Text style={styles.flowSectionHint}>아직 정리본이 없어요. 필요할 때 AI가 이 흐름을 내부 정리본으로 만들어둘게요.</Text>
+          <Pressable style={[styles.primaryButton, generationState?.loading && styles.disabledButton]} onPress={generateWithoutOpening} disabled={generationState?.loading}>
+            <Text style={styles.primaryButtonText}>{generationState?.loading ? '정리 중...' : '생각 정리하기'}</Text>
+          </Pressable>
+          {generationState?.error ? <Text style={styles.voiceErrorText}>{generationState.error}</Text> : null}
+        </View>
+      )}
     </SpringPressable>
   );
 }
@@ -2005,6 +2029,13 @@ function ReportStage({ label, body }: { label: string; body: string }) {
       <Text style={styles.reportStageBody} numberOfLines={2}>{body}</Text>
     </View>
   );
+}
+
+function getThoughtReportSummary(flow: ThoughtFlow) {
+  return flow.mergedDraft.body
+    .split('\n')
+    .map((line) => line.trim())
+    .find((line) => line.length > 20) ?? flow.mergedDraft.title;
 }
 
 function buildReadableThoughtReport(flow: ThoughtFlow) {
@@ -2239,7 +2270,7 @@ function ThoughtFlowDetailScreen({
         scrollIndicatorInsets={{ bottom: 180 }}
       >
         <View style={styles.flowMergedHero}>
-          <Text style={styles.flowMergedKicker}>{hasDraftBody ? '자라난 글 초안' : '새로 묶인 생각'}</Text>
+          <Text style={styles.flowMergedKicker}>{hasDraftBody ? 'AI 정리본' : '정리 전 생각'}</Text>
           <CopyableText style={styles.detailTitle} copyValue={draft.title}>{draft.title}</CopyableText>
           {generationState?.loading ? (
             <View style={styles.draftLoadingBox}>
@@ -2249,13 +2280,10 @@ function ThoughtFlowDetailScreen({
           ) : null}
           {generationState?.error ? <Text style={styles.voiceErrorText}>{generationState.error}</Text> : null}
           {hasDraftBody ? (
-            <>
-              <ReadableReportBreakdown flow={flow} />
-              <CopyableText style={styles.mergedDraftBody} copyValue={draft.body}>{draft.body}</CopyableText>
-            </>
+            <CopyableText style={styles.mergedDraftBody} copyValue={draft.body}>{draft.body}</CopyableText>
           ) : (
             <View style={styles.draftLoadingBox}>
-              <Text style={styles.flowSectionHint}>연결 기준이 바뀌어 새로 묶인 흐름이에요. AI 글 초안은 버튼을 누르면 생성돼요.</Text>
+              <Text style={styles.flowSectionHint}>아직 정리본이 없어요. 버튼을 누르면 AI가 백그라운드에서 정리해서 이 안에 채워둘게요.</Text>
             </View>
           )}
 
@@ -2266,7 +2294,7 @@ function ThoughtFlowDetailScreen({
               </Pressable>
             ) : null}
             <Pressable style={[hasDraftBody ? styles.secondaryButton : styles.primaryButton, generationState?.loading && styles.disabledButton]} onPress={regenerateDraft} disabled={generationState?.loading}>
-              <Text style={hasDraftBody ? styles.secondaryButtonText : styles.primaryButtonText}>{generationState?.loading ? '생성 중...' : hasDraftBody ? '다시 생성' : 'AI로 글 초안 만들기'}</Text>
+              <Text style={hasDraftBody ? styles.secondaryButtonText : styles.primaryButtonText}>{generationState?.loading ? '정리 중...' : hasDraftBody ? '다시 정리' : '생각 정리하기'}</Text>
             </Pressable>
           </View>
           {isSaved && hasDraftBody ? <Text style={styles.savedDraftHint}>이 흐름을 계속 볼 수 있게 저장해둘게요.</Text> : null}
