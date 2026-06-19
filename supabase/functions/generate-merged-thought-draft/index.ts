@@ -1,3 +1,5 @@
+import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.48.1';
+
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
@@ -14,7 +16,15 @@ type RequestBody = {
   flowId?: string;
   title?: string;
   notes?: SourceNote[];
+  sourceNoteIds?: string[];
   thoughtPatternContext?: string;
+};
+
+type NoteRow = {
+  id: string;
+  raw_text: string;
+  ai_title: string | null;
+  created_at: string;
 };
 
 type MergedThoughtDraft = {
@@ -45,22 +55,29 @@ Deno.serve(async (req) => {
 
   try {
     const openAiKey = Deno.env.get('OPENAI_API_KEY');
+    const supabaseUrl = Deno.env.get('SUPABASE_URL');
+    const supabaseAnonKey = Deno.env.get('SUPABASE_ANON_KEY');
     const model = Deno.env.get('OPENAI_MERGED_DRAFT_MODEL') || 'gpt-5.4-mini';
     const fallbackModel = Deno.env.get('OPENAI_MERGED_DRAFT_FALLBACK_MODEL') || 'gpt-5.4-mini';
     const authHeader = req.headers.get('Authorization');
 
-    if (!openAiKey || !authHeader) {
+    if (!openAiKey || !supabaseUrl || !supabaseAnonKey || !authHeader) {
       return json({ error: 'Missing server configuration or auth header' }, 500);
     }
 
     const body = (await req.json()) as RequestBody;
     const flowId = cleanText(body.flowId);
     const flowTitle = cleanText(body.title) || '생각 정리 리포트';
-    const notes = normalizeNotes(body.notes ?? []);
+    const requestedNoteIds = normalizeSourceNoteIds(body.sourceNoteIds ?? body.notes?.map((note) => note.id) ?? []);
     const thoughtPatternContext = cleanRawText(body.thoughtPatternContext).slice(0, 2000);
 
     if (!flowId) return json({ error: 'flowId is required' }, 400);
-    if (notes.length < 2) return json({ error: 'At least 2 source notes are required' }, 400);
+    if (requestedNoteIds.length < 2) return json({ error: 'At least 2 source notes are required' }, 400);
+
+    const supabase = createClient(supabaseUrl, supabaseAnonKey, {
+      global: { headers: { Authorization: authHeader } },
+    });
+    const notes = await loadAuthorizedSourceNotes(supabase, requestedNoteIds);
 
     const result = await generateDraft(openAiKey, model, fallbackModel, flowId, flowTitle, notes, thoughtPatternContext);
     return json({ ok: true, draft: result.draft, model: result.model, fallbackUsed: result.fallbackUsed });
@@ -68,6 +85,36 @@ Deno.serve(async (req) => {
     return json({ error: error instanceof Error ? error.message : String(error) }, 500);
   }
 });
+
+function normalizeSourceNoteIds(values: string[]) {
+  return Array.from(new Set(values.map(cleanText).filter(Boolean))).slice(0, 8);
+}
+
+async function loadAuthorizedSourceNotes(
+  supabase: ReturnType<typeof createClient>,
+  sourceNoteIds: string[],
+): Promise<Required<SourceNote>[]> {
+  const { data, error } = await supabase
+    .from('notes')
+    .select('id, raw_text, ai_title, created_at')
+    .in('id', sourceNoteIds)
+    .is('deleted_at', null);
+
+  if (error) throw new Error(`Source note fetch failed: ${error.message}`);
+  const rows = ((data ?? []) as NoteRow[]);
+  const byId = new Map(rows.map((row) => [row.id, row]));
+  const orderedRows = sourceNoteIds.map((id) => byId.get(id)).filter((row): row is NoteRow => !!row);
+  if (orderedRows.length !== sourceNoteIds.length) {
+    throw new Error('Some source notes were not found or not allowed');
+  }
+
+  return orderedRows.map((row) => ({
+    id: row.id,
+    title: cleanText(row.ai_title) || makeDraftTitle(row.raw_text),
+    rawText: cleanRawText(row.raw_text),
+    createdAt: row.created_at,
+  })).filter((note) => note.rawText.length > 0);
+}
 
 async function generateDraft(
   openAiKey: string,

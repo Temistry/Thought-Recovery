@@ -774,21 +774,78 @@ export default function App() {
   }
 
   async function openTrash() {
-    setTrashNotes(await listLocalTrashNotes());
+    const localTrash = await listLocalTrashNotes();
+    if (canUseCloud && supabase) {
+      const { data, error } = await supabase
+        .from('notes')
+        .select('*')
+        .not('deleted_at', 'is', null)
+        .order('deleted_at', { ascending: false });
+      if (error) {
+        showError('휴지통 불러오기 실패', error);
+        setTrashNotes(localTrash);
+        setShowTrash(true);
+        return;
+      }
+      const merged = [...((data ?? []) as Note[]), ...localTrash]
+        .filter((note, index, all) => all.findIndex((item) => item.id === note.id) === index);
+      setTrashNotes(merged);
+    } else {
+      setTrashNotes(localTrash);
+    }
     setShowTrash(true);
   }
 
   async function restoreTrashNote(noteId: string) {
-    const restored = await restoreLocalTrashNote(noteId);
+    const target = trashNotes.find((note) => note.id === noteId);
+    let restored = await restoreLocalTrashNote(noteId);
+
+    if (canUseCloud && supabase && target && !noteId.startsWith('local-')) {
+      const { data, error } = await supabase
+        .from('notes')
+        .update({ deleted_at: null })
+        .eq('id', noteId)
+        .select('*')
+        .single();
+      if (error) {
+        showError('휴지통 복원 실패', error);
+        return;
+      }
+      restored = data as Note;
+      await deleteLocalTrashNote(noteId).catch(() => undefined);
+    }
+
     if (!restored) return;
     setTrashNotes((prev) => prev.filter((note) => note.id !== noteId));
-    setNotes((prev) => [restored, ...prev]);
-    setArchivePreviewNotes((prev) => [restored, ...prev].slice(0, archivePreviewLimit));
+    setNotes((prev) => [restored, ...prev].filter((note, index, all) => all.findIndex((item) => item.id === note.id) === index));
+    setArchivePreviewNotes((prev) => [restored, ...prev].filter((note, index, all) => all.findIndex((item) => item.id === note.id) === index).slice(0, archivePreviewLimit));
   }
 
   async function permanentlyDeleteTrashNote(noteId: string) {
-    await deleteLocalTrashNote(noteId);
-    setTrashNotes((prev) => prev.filter((note) => note.id !== noteId));
+    const targetIds = new Set([
+      noteId,
+      ...trashNotes.filter((note) => note.parent_note_id === noteId).map((note) => note.id),
+    ]);
+    const targets = trashNotes.filter((note) => targetIds.has(note.id));
+
+    if (canUseCloud && supabase) {
+      const cloudTargets = targets.filter((note) => !note.id.startsWith('local-'));
+      const audioPaths = cloudTargets
+        .map((note) => note.audio_url)
+        .filter((value): value is string => !!value && !isLocalAudioUri(value) && !value.startsWith('http://') && !value.startsWith('https://'));
+      if (audioPaths.length > 0) {
+        const { error: storageError } = await supabase.storage.from(AUDIO_BUCKET).remove(audioPaths);
+        if (storageError) throw storageError;
+      }
+      const cloudIds = cloudTargets.map((note) => note.id);
+      if (cloudIds.length > 0) {
+        const { error: deleteError } = await supabase.from('notes').delete().in('id', cloudIds);
+        if (deleteError) throw deleteError;
+      }
+    }
+
+    await Promise.all(Array.from(targetIds).map((id) => deleteLocalTrashNote(id).catch(() => undefined)));
+    setTrashNotes((prev) => prev.filter((note) => !targetIds.has(note.id)));
   }
 
   function setVoiceJob(noteId: string, status: VoiceJobStatus, message: string, error?: string) {
@@ -1071,6 +1128,7 @@ export default function App() {
         body: {
           flowId: flow.id,
           title: flow.title,
+          sourceNoteIds: sourceNotes.map((note) => note.id),
           notes: sourceNotes,
           thoughtPatternContext,
         },
