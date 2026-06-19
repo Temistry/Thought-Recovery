@@ -247,8 +247,10 @@ export default function App() {
     [visibleThoughtFlows, generatedDrafts],
   );
   const selectedThoughtFlow = useMemo(() => {
-    return visibleThoughtFlowsWithDrafts.find((item) => item.id === selectedThoughtFlowId) ?? null;
-  }, [visibleThoughtFlowsWithDrafts, selectedThoughtFlowId]);
+    return visibleThoughtFlowsWithDrafts.find((item) => item.id === selectedThoughtFlowId)
+      ?? cachedThoughtFlows.find((item) => item.id === selectedThoughtFlowId)
+      ?? null;
+  }, [visibleThoughtFlowsWithDrafts, cachedThoughtFlows, selectedThoughtFlowId]);
   const selectedNote = useMemo(
     () => selectedNoteOverride ?? notes.find((note) => note.id === selectedNoteId) ?? null,
     [notes, selectedNoteId, selectedNoteOverride],
@@ -1519,6 +1521,7 @@ export default function App() {
 
   function openThoughtFlow(flow: ThoughtFlow) {
     void Haptics.selectionAsync().catch(() => undefined);
+    setCachedThoughtFlows((prev) => prev.some((item) => item.id === flow.id) ? prev : [flow, ...prev]);
     setSelectedNoteId(null);
     setSelectedNoteOverride(null);
     setSelectedThoughtFlowId(flow.id);
@@ -1645,6 +1648,7 @@ export default function App() {
             onStopVoice={stopOriginalAudio}
             onRetryVoice={retryVoiceTranscription}
             onOpenRelated={openNote}
+            onOpenRelatedThoughtFlow={openThoughtFlow}
             onRewriteNote={rewriteOriginalNote}
             rewriting={noteRewriteInFlightId === selectedNote.id}
           />
@@ -2783,6 +2787,7 @@ function NoteDetail({
   onStopVoice,
   onRetryVoice,
   onOpenRelated,
+  onOpenRelatedThoughtFlow,
   onRewriteNote,
   rewriting,
 }: {
@@ -2802,6 +2807,7 @@ function NoteDetail({
   onDetachLog: (log: Note) => Promise<void>;
   onRetryVoice: (note: Note) => Promise<void>;
   onOpenRelated: (note: Note) => void;
+  onOpenRelatedThoughtFlow: (flow: ThoughtFlow) => void;
   onRewriteNote: (note: Note) => Promise<void>;
   rewriting: boolean;
 }) {
@@ -2813,6 +2819,7 @@ function NoteDetail({
   const [draftText, setDraftText] = useState(note.raw_text);
   const noteMeaning = inferMeaning(note);
   const relatedCandidates = useMemo(() => relatedNotes.map((related) => scoreRelatedNote(note, related)), [note, relatedNotes]);
+  const relatedThoughtFlow = useMemo(() => relatedNotes.length ? buildRelatedThoughtFlow(note, relatedNotes) : null, [note, relatedNotes]);
 
   useEffect(() => {
     setDraftText(note.raw_text);
@@ -2967,11 +2974,12 @@ function NoteDetail({
         <CopyableText style={styles.detailSummary} copyValue={note.ai_summary || makeDraftSummary(note.raw_text)}>{note.ai_summary || makeDraftSummary(note.raw_text)}</CopyableText>
       </View>
 
-      {relatedNotes.length ? (
-        <View style={styles.rediscoveryBanner}>
+      {relatedThoughtFlow ? (
+        <Pressable style={styles.rediscoveryBanner} onPress={() => onOpenRelatedThoughtFlow(relatedThoughtFlow)} accessibilityLabel="연결된 생각 열기">
           <Text style={styles.rediscoveryBannerKicker}>연결된 생각</Text>
           <Text style={styles.rediscoveryBannerTitle}>이어볼 만한 원본이 {relatedNotes.length}개 있어요</Text>
-        </View>
+          <Text style={styles.rediscoveryBannerHint}>탭해서 자라난 생각으로 보기</Text>
+        </Pressable>
       ) : null}
 
       <View style={styles.detailSection}>
@@ -3424,8 +3432,9 @@ function buildThoughtFlows(notes: Note[], feedback: RetrievalFeedbackMap, existi
     });
   }
 
+  const relatedPairFlows = buildRelatedPairThoughtFlows(visible, feedback, context);
   const pinnedFlow = buildPinnedPlanningThoughtFlow(visible);
-  const allFlows = pinnedFlow ? [pinnedFlow, ...flows] : flows;
+  const allFlows = pinnedFlow ? [pinnedFlow, ...flows, ...relatedPairFlows] : [...flows, ...relatedPairFlows];
 
   const sortedFlows = allFlows.sort(
     (a, b) => (b.confidenceScore ?? 0) - (a.confidenceScore ?? 0) || b.notes.length - a.notes.length,
@@ -3444,6 +3453,62 @@ function buildThoughtFlows(notes: Note[], feedback: RetrievalFeedbackMap, existi
   }
 
   return dedupedFlows;
+}
+
+function buildRelatedPairThoughtFlows(notes: Note[], feedback: RetrievalFeedbackMap, context: ConnectionCorpusContext) {
+  const flows: ThoughtFlow[] = [];
+  const seenPairs = new Set<string>();
+
+  for (const note of notes) {
+    const related = retrieveCandidates(note, notes, feedback, context).filter((item) => item.note.id !== note.id)[0];
+    if (!related) continue;
+    const pairKey = [note.id, related.note.id].sort().join(':');
+    if (seenPairs.has(pairKey)) continue;
+    seenPairs.add(pairKey);
+    flows.push(buildRelatedThoughtFlow(note, [related.note], context));
+  }
+
+  return flows;
+}
+
+function buildRelatedThoughtFlow(seed: Note, relatedNotes: Note[], existingContext?: ConnectionCorpusContext): ThoughtFlow {
+  const now = new Date().toISOString();
+  const sourceNotes = [seed, ...relatedNotes]
+    .filter((note, index, array) => array.findIndex((item) => item.id === note.id) === index)
+    .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
+    .slice(0, 5);
+  const context = existingContext ?? buildConnectionCorpusContext(sourceNotes);
+  const profiles = sourceNotes.map((note) => inferMeaning(note));
+  const sharedProblem = mostCommon(profiles.map((profile) => profile.problem).filter(isMeaningfulThoughtFlowKey))
+    || mostCommonConnectionTerms(sourceNotes, context)[0]
+    || inferMeaning(seed).problem
+    || '서로 이어지는 생각';
+  const sharedIntent = mostCommon(profiles.map((profile) => profile.intent).filter(isMeaningfulThoughtFlowKey)) || sharedProblem;
+  const sharedDecisionAxis = mostCommon(profiles.map((profile) => profile.decisionAxis).filter(isMeaningfulThoughtFlowKey)) || sharedProblem;
+  const fallbackTitle = seed.ai_title || makeDraftTitle(seed.raw_text);
+  const flowTitle = isGenericThoughtFlowKey(makeFlowTitle(sharedProblem, sharedDecisionAxis)) ? fallbackTitle : makeFlowTitle(sharedProblem, sharedDecisionAxis);
+  const noteIds = sourceNotes.map((note) => note.id);
+  const flowId = `flow-related-${slugifyFlowId(flowTitle)}-${noteIds.join('-')}`;
+  const topConnection = sourceNotes[1] ? scoreRelatedNote(seed, sourceNotes[1], {}, context) : null;
+
+  return {
+    id: flowId,
+    status: 'temporary',
+    title: flowTitle,
+    noteIds,
+    notes: sourceNotes,
+    mergedDraft: buildFallbackMergedThoughtDraft(flowId, flowTitle, sourceNotes, sharedProblem, sharedDecisionAxis, now),
+    sharedProblem,
+    sharedIntent,
+    sharedDecisionAxis,
+    synthesis: topConnection?.reasons[0]
+      ?? `이 흐름은 방금 본 원본과 이어볼 만한 원본을 함께 묶은 생각이에요.`,
+    whyNow: `원본 상세에서 연결이 확인됐기 때문에, 흐름에서도 바로 이어 읽을 수 있게 올렸어요.`,
+    nextQuestion: `이 연결된 메모들을 하나의 판단이나 다음 행동으로 줄이면 무엇이 남을까?`,
+    createdAt: sourceNotes[sourceNotes.length - 1]?.created_at ?? now,
+    updatedAt: sourceNotes[0]?.updated_at ?? sourceNotes[0]?.created_at ?? now,
+    confidenceScore: Math.min(0.9, 0.58 + sourceNotes.length * 0.08 + (topConnection?.score ?? 0) * 0.03),
+  };
 }
 
 function buildMechanicalNoteClusters(notes: Note[], feedback: RetrievalFeedbackMap, context: ConnectionCorpusContext) {
@@ -5228,6 +5293,11 @@ const styles = StyleSheet.create({
     color: '#171412',
     fontSize: 16,
     fontWeight: '900',
+  },
+  rediscoveryBannerHint: {
+    color: '#6b8b73',
+    fontSize: 12,
+    fontWeight: '800',
   },
   rediscoveryBannerBody: {
     color: '#5f554a',
