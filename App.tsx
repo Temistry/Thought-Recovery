@@ -1797,6 +1797,36 @@ function TodayThoughtMiniCard({ note, voiceJob, onPress }: { note: Note; voiceJo
   );
 }
 
+function ArchiveOriginalNoteCard({ note, voiceJob, onPress, onRetryVoice }: { note: Note; voiceJob?: VoiceJob; onPress: () => void; onRetryVoice: () => void }) {
+  const isProcessing = voiceJob ? ['saving', 'uploading', 'transcribing'].includes(voiceJob.status) : isProcessingVoiceNote(note);
+  const isPersistedFailed = isFailedVoiceNote(note);
+  const isFailed = voiceJob?.status === 'failed' || isPersistedFailed;
+  const sourceLabel = note.source_type === 'voice' ? '음성' : '텍스트';
+  const title = isProcessing ? '방금 말한 원본' : note.ai_title || makeDraftTitle(note.raw_text);
+  const preview = isProcessing ? (voiceJob?.message ?? '전사와 정리를 이어가는 중이에요') : note.raw_text || note.ai_summary || '';
+
+  return (
+    <Pressable style={[styles.archiveOriginalCard, isProcessing && styles.todayMiniCardProcessing, isFailed && styles.failedCard]} onPress={onPress}>
+      <View style={styles.archiveOriginalMetaRow}>
+        <Text style={styles.archiveOriginalSource}>{note.source_type === 'voice' ? '🎙 ' : '✎ '}{sourceLabel}</Text>
+        <Text style={styles.archiveOriginalDate}>{formatDate(note.created_at)}</Text>
+      </View>
+      <Text style={styles.archiveOriginalTitle} numberOfLines={1}>{title}</Text>
+      <Text style={styles.archiveOriginalPreview} numberOfLines={2}>{preview}</Text>
+      {(voiceJob && voiceJob.status !== 'done') || (!voiceJob && isPersistedFailed) ? (
+        <View style={styles.voiceStatusBox}>
+          <Text style={styles.voiceStatusText}>{voiceJob?.message ?? '전사 실패 · 다시 시도 가능'}</Text>
+          {isFailed ? (
+            <Pressable style={styles.retryButton} onPress={onRetryVoice}>
+              <Text style={styles.retryButtonText}>다시</Text>
+            </Pressable>
+          ) : null}
+        </View>
+      ) : null}
+    </Pressable>
+  );
+}
+
 function NoteCard({
   note,
   voiceJob,
@@ -1930,10 +1960,9 @@ function SwipeableArchiveNoteCard({
         <Text style={styles.swipeTrashIcon}>🗑</Text>
       </View>
       <Animated.View style={{ transform: [{ translateX }] }}>
-        <NoteCard
+        <ArchiveOriginalNoteCard
           note={note}
           voiceJob={voiceJob}
-          relatedCount={0}
           onPress={onOpen}
           onRetryVoice={onRetryVoice}
         />
@@ -5983,10 +6012,12 @@ const styles = StyleSheet.create({
     fontWeight: '700',
   },
   searchCardCompact: {
-    backgroundColor: '#f5f4f2',
-    borderRadius: 18,
-    paddingHorizontal: 2,
-    paddingVertical: 2,
+    backgroundColor: '#fffefd',
+    borderColor: '#eee7df',
+    borderWidth: 1,
+    borderRadius: 20,
+    paddingHorizontal: 4,
+    paddingVertical: 4,
   },
   retrievalHeroTopRow: {
     flexDirection: 'row',
@@ -6045,6 +6076,52 @@ const styles = StyleSheet.create({
     color: '#8f8578',
     fontSize: 12,
     fontWeight: '800',
+  },
+  archiveOriginalCard: {
+    backgroundColor: '#ffffff',
+    borderColor: '#f0eeeb',
+    borderWidth: 1,
+    borderRadius: 18,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    gap: 7,
+    shadowColor: '#1e1712',
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.035,
+    shadowRadius: 12,
+    elevation: 1,
+  },
+  archiveOriginalMetaRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    gap: 10,
+  },
+  archiveOriginalSource: {
+    color: '#7c5c2e',
+    backgroundColor: '#efe4d4',
+    borderRadius: 999,
+    overflow: 'hidden',
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    fontSize: 11,
+    fontWeight: '900',
+  },
+  archiveOriginalDate: {
+    color: '#aaa197',
+    fontSize: 12,
+    fontWeight: '700',
+  },
+  archiveOriginalTitle: {
+    color: '#171412',
+    fontSize: 15,
+    fontWeight: '900',
+  },
+  archiveOriginalPreview: {
+    color: '#776e64',
+    fontSize: 13,
+    lineHeight: 18,
+    fontWeight: '600',
   },
   thoughtReportCard: {
     backgroundColor: '#ffffff',
