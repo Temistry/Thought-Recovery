@@ -241,9 +241,13 @@ export default function App() {
   const archiveGroups = useMemo(() => groupNotesByDate(archiveSourceNotes), [archiveSourceNotes]);
   const thoughtFlowFingerprint = useMemo(() => computeThoughtFlowFingerprint(feedNotes, retrievalFeedback), [feedNotes, retrievalFeedback]);
   const retrievalSections = useMemo(() => buildRetrievalSections(feedNotes, retrievalFeedback), [feedNotes, retrievalFeedback]);
+  const draftRestoredThoughtFlows = useMemo(
+    () => buildThoughtFlowsFromDrafts(generatedDrafts, feedNotes),
+    [generatedDrafts, feedNotes],
+  );
   const visibleThoughtFlows = useMemo(
-    () => mergeThoughtFlows(retrievalSections.thoughtFlows, cachedThoughtFlows),
-    [retrievalSections.thoughtFlows, cachedThoughtFlows],
+    () => mergeThoughtFlows(retrievalSections.thoughtFlows, mergeThoughtFlows(draftRestoredThoughtFlows, cachedThoughtFlows)),
+    [retrievalSections.thoughtFlows, draftRestoredThoughtFlows, cachedThoughtFlows],
   );
   const visibleThoughtFlowsWithDrafts = useMemo(
     () => visibleThoughtFlows.map((flow) => generatedDrafts[flow.id] ? { ...flow, title: generatedDrafts[flow.id].title || flow.title, mergedDraft: generatedDrafts[flow.id] } : flow),
@@ -365,14 +369,14 @@ export default function App() {
   }, [activeTab, thoughtFlowFingerprint]);
 
   useEffect(() => {
-    if (retrievalSections.thoughtFlows.length === 0) return;
-    const nextFlows = mergeThoughtFlows(retrievalSections.thoughtFlows, cachedThoughtFlows);
+    const nextFlows = mergeThoughtFlows(retrievalSections.thoughtFlows, mergeThoughtFlows(draftRestoredThoughtFlows, cachedThoughtFlows));
+    if (nextFlows.length === 0) return;
     setCachedThoughtFlows(nextFlows);
     void Promise.all([
       replaceCachedThoughtFlows(nextFlows),
       writeLocalKeyValue(THOUGHT_FLOW_FINGERPRINT_KEY, thoughtFlowFingerprint),
     ]).catch(() => undefined);
-  }, [retrievalSections.thoughtFlows, thoughtFlowFingerprint]);
+  }, [retrievalSections.thoughtFlows, draftRestoredThoughtFlows, thoughtFlowFingerprint]);
 
   useEffect(() => {
     let cancelled = false;
@@ -3242,6 +3246,47 @@ function buildCollectionSummaries(notes: Note[]): CollectionSummary[] {
   return collections.filter((collection) => collection.notes.length > 0 || collection.id !== 'uncategorized');
 }
 
+
+function buildThoughtFlowsFromDrafts(generatedDrafts: Record<string, MergedThoughtDraft>, notes: Note[]) {
+  const byId = new Map(notes.map((note) => [note.id, note]));
+  const flows: ThoughtFlow[] = [];
+
+  for (const draft of Object.values(generatedDrafts)) {
+    if (!draft.sourceNoteIds.length) continue;
+    const sourceNotes = draft.sourceNoteIds.map((id) => byId.get(id)).filter((note): note is Note => !!note);
+    if (sourceNotes.length === 0) continue;
+    const now = draft.createdAt || new Date().toISOString();
+    const context = buildConnectionCorpusContext(sourceNotes);
+    const profiles = sourceNotes.map((note) => inferMeaning(note));
+    const sharedProblem = mostCommon(profiles.map((profile) => profile.problem).filter(isMeaningfulThoughtFlowKey))
+      || mostCommonConnectionTerms(sourceNotes, context)[0]
+      || draft.title
+      || '저장된 자라난 생각';
+    const sharedIntent = mostCommon(profiles.map((profile) => profile.intent).filter(isMeaningfulThoughtFlowKey)) || sharedProblem;
+    const sharedDecisionAxis = mostCommon(profiles.map((profile) => profile.decisionAxis).filter(isMeaningfulThoughtFlowKey)) || sharedProblem;
+    const sortedNotes = [...sourceNotes].sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+
+    flows.push({
+      id: draft.flowId,
+      status: draft.status === 'saved' ? 'saved' : 'temporary',
+      title: draft.title || sharedProblem,
+      noteIds: draft.sourceNoteIds,
+      notes: sortedNotes,
+      mergedDraft: draft,
+      sharedProblem,
+      sharedIntent,
+      sharedDecisionAxis,
+      synthesis: draft.body.split('\n').find((line) => line.trim().length > 20)?.trim() || sharedProblem,
+      whyNow: '이미 정리해둔 생각이라 흐름 탭에서 다시 이어볼 수 있어요.',
+      nextQuestion: makeLocalFallbackNextQuestion(draft.judgmentSummary, draft.title || sharedProblem),
+      createdAt: sortedNotes[sortedNotes.length - 1]?.created_at ?? now,
+      updatedAt: draft.createdAt || sortedNotes[0]?.updated_at || sortedNotes[0]?.created_at || now,
+      confidenceScore: 0.88,
+    });
+  }
+
+  return flows.sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime());
+}
 
 function mergeThoughtFlows(primary: ThoughtFlow[], secondary: ThoughtFlow[]) {
   const byId = new Map<string, ThoughtFlow>();
