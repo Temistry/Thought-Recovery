@@ -3292,8 +3292,24 @@ function mergeThoughtFlows(primary: ThoughtFlow[], secondary: ThoughtFlow[]) {
   const byId = new Map<string, ThoughtFlow>();
   const orderedIds: string[] = [];
 
-  function upsert(flow: ThoughtFlow, preferExistingDraft: boolean) {
-    const existing = byId.get(flow.id);
+  function normalizeFlow(flow: ThoughtFlow): ThoughtFlow {
+    const draft = (flow as Partial<ThoughtFlow>).mergedDraft;
+    if (draft?.body !== undefined) return flow;
+    const now = flow.updatedAt || flow.createdAt || new Date().toISOString();
+    const sharedProblem = flow.sharedProblem || flow.title || '저장된 자라난 생각';
+    const sharedDecisionAxis = flow.sharedDecisionAxis || sharedProblem;
+    return {
+      ...flow,
+      sharedProblem,
+      sharedDecisionAxis,
+      mergedDraft: buildFallbackMergedThoughtDraft(flow.id, flow.title, flow.notes ?? [], sharedProblem, sharedDecisionAxis, now),
+    };
+  }
+
+  function upsert(inputFlow: ThoughtFlow, preferExistingDraft: boolean) {
+    const flow = normalizeFlow(inputFlow);
+    const existingRaw = byId.get(flow.id);
+    const existing = existingRaw ? normalizeFlow(existingRaw) : null;
     if (!existing) {
       byId.set(flow.id, flow);
       orderedIds.push(flow.id);
