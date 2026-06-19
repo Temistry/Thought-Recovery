@@ -1192,7 +1192,7 @@ export default function App() {
   function renderOrganized() {
     return (
       <ScrollView contentContainerStyle={styles.retrievalScrollContent}>
-        <AppTopBar title="흐름" rightIcon="☷" />
+        <AppTopBar title="흐름" />
         <View style={styles.flowMapIntro}>
           <Text style={styles.flowMapIntroText}>생각들이 연결되며 흐름이 자라나요</Text>
         </View>
