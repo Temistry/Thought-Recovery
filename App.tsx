@@ -556,7 +556,7 @@ export default function App() {
             user_id: session.user.id,
             raw_text: trimmed,
             source_type: sourceType,
-            audio_url: audioUrl ?? null,
+            audio_url: audioUrl && !isLocalAudioUri(audioUrl) ? audioUrl : null,
             ai_title: makeDraftTitle(trimmed),
             ai_summary: makeDraftSummary(trimmed),
             ai_tags: [],
@@ -578,6 +578,25 @@ export default function App() {
       setNotes((prev) => [note, ...prev]);
       return note;
     } catch (error) {
+      if (sourceType === 'voice' || isNetworkRequestFailure(error)) {
+        try {
+          const localNote = await createLocalNote(trimmed, sourceType, audioUrl, { audioDurationMs });
+          setNotes((prev) => [localNote, ...prev]);
+          if (sourceType === 'voice') {
+            setVoiceJob(
+              localNote.id,
+              'failed',
+              '클라우드 저장 실패 · 원본은 보관됨',
+              '네트워크가 안정되면 다시 시도할 수 있어요.',
+            );
+          }
+          return localNote;
+        } catch (localError) {
+          showError('메모 저장 실패', localError);
+          return null;
+        }
+      }
+
       showError('메모 저장 실패', error);
       return null;
     } finally {
@@ -640,7 +659,7 @@ export default function App() {
       setRecording(null);
       setRecordingElapsedMs(0);
       const note = await createNote('음성 메모를 저장하는 중입니다.', 'voice', uri, durationMs || null);
-      if (note && uri && canUseCloud) {
+      if (note && uri && canUseCloud && canUploadVoiceNote(note)) {
         setVoiceJob(note.id, 'saving', '음성을 저장하는 중');
         await uploadAndTranscribeVoice(note.id, uri);
       } else if (note && !canUseCloud) {
@@ -759,7 +778,7 @@ export default function App() {
     const updated = await updateLocalNote(note.id, basicPatch).catch(() => null);
     setNotes((prev) => prev.map((item) => (item.id === note.id ? { ...item, ...basicPatch, ...(updated ?? {}) } : item)));
 
-    if (note && audioUri && canUseCloud) {
+    if (note && audioUri && canUseCloud && canUploadVoiceNote(note)) {
       setVoiceJob(note.id, 'transcribing', 'Pro AI 전사도 이어서 확인하는 중');
       await uploadAndTranscribeVoice(note.id, audioUri);
     }
@@ -1047,6 +1066,10 @@ export default function App() {
     const audioRef = note.local_audio_url ?? note.audio_url;
     if (!audioRef) {
       Alert.alert('재시도 불가', '재시도할 음성 파일 정보가 없어요.');
+      return;
+    }
+    if (!canUploadVoiceNote(note)) {
+      Alert.alert('클라우드 저장 필요', '이 녹음은 기기에 안전하게 보관되어 있어요. 클라우드 동기화가 먼저 복구되면 AI 전사를 다시 시도할 수 있습니다.');
       return;
     }
 
@@ -4337,6 +4360,10 @@ function isProcessingVoiceNote(note: Note, voiceJob?: VoiceJob) {
   return note.raw_text.includes('전사하는 중입니다') || note.raw_text.includes('업로드하는 중입니다');
 }
 
+function canUploadVoiceNote(note: Pick<Note, 'id'>) {
+  return !note.id.startsWith('local-');
+}
+
 function isFailedVoiceNote(note: Note) {
   const title = note.ai_title?.toLowerCase() ?? '';
   const summary = note.ai_summary?.toLowerCase() ?? '';
@@ -4426,9 +4453,20 @@ function describeUnknownError(error: unknown) {
   return String(error);
 }
 
-function showError(title: string, error: unknown) {
+function isNetworkRequestFailure(error: unknown) {
+  return describeUnknownError(error).toLowerCase().includes('network request failed');
+}
+
+function userFacingErrorMessage(error: unknown) {
   const message = describeUnknownError(error);
-  Alert.alert(title, message);
+  if (message.toLowerCase().includes('network request failed')) {
+    return '네트워크 연결이 불안정해요. 원본은 기기에 보관하고, 연결이 안정되면 다시 시도할 수 있습니다.';
+  }
+  return message.split('\n').slice(0, 3).join('\n');
+}
+
+function showError(title: string, error: unknown) {
+  Alert.alert(title, userFacingErrorMessage(error));
 }
 
 const UI_THEME = {
