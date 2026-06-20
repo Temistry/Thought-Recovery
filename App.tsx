@@ -1210,7 +1210,7 @@ export default function App() {
       );
       await loadNotes();
     } catch (error) {
-      const message = describeUnknownError(error);
+      const message = userFacingErrorMessage(error);
       setVoiceJob(noteId, 'failed', '전사 실패 · 다시 시도 가능', message);
       updateVoiceNoteProgress(noteId, {
         ai_title: '음성 전사 실패',
@@ -1218,7 +1218,6 @@ export default function App() {
         ai_tags: ['음성', '재시도'],
         audio_url: audioPath,
       });
-      showError('음성 전사 실패', error);
     }
   }
 
