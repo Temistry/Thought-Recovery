@@ -83,7 +83,7 @@ async function setExclusiveAudioModeAsync(allowsRecordingIOS: boolean) {
 }
 
 
-type AppTab = 'today' | 'organized' | 'archive';
+type AppTab = 'today' | 'organized' | 'todos' | 'archive';
 type VoiceJobStatus = 'saving' | 'uploading' | 'transcribing' | 'done' | 'failed';
 type RetrievalFeedbackStatus = 'useful' | 'later' | 'hidden';
 type RetrievalFeedbackMap = Record<string, { status: RetrievalFeedbackStatus; updatedAt: string; usedCount: number }>;
@@ -181,6 +181,17 @@ type ArchiveDateGroup = {
   title: string;
   notes: Note[];
 };
+type ActionDueStatus = 'needs_due' | 'date_only' | 'ready';
+type ActionItem = {
+  id: string;
+  title: string;
+  sourceText: string;
+  sourceNote: Note;
+  dueLabel?: string;
+  dueTimeLabel?: string;
+  dueStatus: ActionDueStatus;
+  calendarReady: boolean;
+};
 
 export default function App() {
   const [session, setSession] = useState<Session | null>(null);
@@ -237,6 +248,7 @@ export default function App() {
     [notes],
   );
   const filteredNotes = useMemo(() => filterNotes(activityNotes, searchQuery), [activityNotes, searchQuery]);
+  const actionItems = useMemo(() => extractActionItems(activityNotes), [activityNotes]);
   const archiveSourceNotes = searchQuery.trim() ? archiveSearchResults : (archivePreviewNotes.length ? archivePreviewNotes : filteredNotes);
   const archiveGroups = useMemo(() => groupNotesByDate(archiveSourceNotes), [archiveSourceNotes]);
   const thoughtFlowFingerprint = useMemo(() => computeThoughtFlowFingerprint(feedNotes, retrievalFeedback), [feedNotes, retrievalFeedback]);
@@ -1492,6 +1504,50 @@ export default function App() {
     }
   }
 
+  function renderTodos() {
+    const readyCount = actionItems.filter((item) => item.calendarReady).length;
+    const needsDueCount = actionItems.filter((item) => item.dueStatus !== 'ready').length;
+
+    return (
+      <ScrollView contentContainerStyle={styles.retrievalScrollContent}>
+        <AppTopBar title="할 일" />
+        <View style={styles.todoHeroCard}>
+          <Text style={styles.todoHeroKicker}>음성에서 분리됨</Text>
+          <Text style={styles.todoHeroTitle}>말 속의 실행 항목을 놓치지 않게 모아요</Text>
+          <Text style={styles.todoHeroBody}>마감이 없으면 먼저 물어보고, 날짜와 시간이 명확한 일은 다음 단계에서 캘린더와 알림으로 연결합니다.</Text>
+          <View style={styles.todoStatsRow}>
+            <View style={styles.todoStatPill}>
+              <Text style={styles.todoStatNumber}>{actionItems.length}</Text>
+              <Text style={styles.todoStatLabel}>발견</Text>
+            </View>
+            <View style={styles.todoStatPill}>
+              <Text style={styles.todoStatNumber}>{needsDueCount}</Text>
+              <Text style={styles.todoStatLabel}>마감 필요</Text>
+            </View>
+            <View style={styles.todoStatPill}>
+              <Text style={styles.todoStatNumber}>{readyCount}</Text>
+              <Text style={styles.todoStatLabel}>캘린더 후보</Text>
+            </View>
+          </View>
+        </View>
+
+        <View style={styles.todoListSection}>
+          <Text style={styles.sectionTitle}>정리된 할 일</Text>
+          {actionItems.length ? (
+            actionItems.map((item) => (
+              <TodoActionCard key={item.id} item={item} onOpenSource={() => openNote(item.sourceNote)} />
+            ))
+          ) : (
+            <View style={styles.todayEmptyCard}>
+              <Text style={styles.todayEmptyTitle}>아직 분리된 할 일이 없어요</Text>
+              <Text style={styles.todayEmptyBody}>“내일까지 보내야 해”처럼 말하면 여기로 따로 모을게요.</Text>
+            </View>
+          )}
+        </View>
+      </ScrollView>
+    );
+  }
+
   function renderArchive() {
     const visibleArchiveGroups = archiveGroups;
     if (searchQuery.trim()) {
@@ -1618,6 +1674,7 @@ export default function App() {
 
   function renderTabContent(tab: AppTab = activeTab) {
     if (tab === 'organized') return renderOrganized();
+    if (tab === 'todos') return renderTodos();
     if (tab === 'archive') return renderArchive();
     return renderToday();
   }
@@ -2024,6 +2081,7 @@ function BottomTabs({ activeTab, onChange }: { activeTab: AppTab; onChange: (tab
   const tabs: Array<{ id: AppTab; label: string; icon: string }> = [
     { id: 'today', label: '오늘', icon: '✦' },
     { id: 'organized', label: '흐름', icon: '🌱' },
+    { id: 'todos', label: '할 일', icon: '✓' },
     { id: 'archive', label: '보관', icon: '▤' }
   ];
 
@@ -2043,6 +2101,27 @@ function BottomTabs({ activeTab, onChange }: { activeTab: AppTab; onChange: (tab
         );
       })}
     </View>
+  );
+}
+
+function TodoActionCard({ item, onOpenSource }: { item: ActionItem; onOpenSource: () => void }) {
+  const statusLabel = item.dueStatus === 'ready' ? '캘린더 후보' : item.dueStatus === 'date_only' ? '시간 확인 필요' : '마감 확인 필요';
+  const question = item.dueStatus === 'ready'
+    ? '캘린더 연결 준비됨'
+    : item.dueStatus === 'date_only'
+      ? '몇 시로 둘까요?'
+      : '언제까지 할까요?';
+
+  return (
+    <Pressable style={styles.todoCard} onPress={onOpenSource}>
+      <View style={styles.todoCardTopRow}>
+        <Text style={[styles.todoStatusPill, item.dueStatus === 'ready' && styles.todoStatusReady]}>{statusLabel}</Text>
+        <Text style={styles.todoSourceTime}>{formatDate(item.sourceNote.created_at)}</Text>
+      </View>
+      <Text style={styles.todoTitle}>{item.title}</Text>
+      <Text style={styles.todoMeta}>{item.dueLabel ? `${item.dueLabel}${item.dueTimeLabel ? ` · ${item.dueTimeLabel}` : ''}` : question}</Text>
+      <Text style={styles.todoSourceText} numberOfLines={2}>{`“${item.sourceText}”`}</Text>
+    </Pressable>
   );
 }
 
@@ -4331,6 +4410,102 @@ function makeDraftSummary(text: string) {
   return cleaned.length > 120 ? `${cleaned.slice(0, 120)}...` : cleaned;
 }
 
+
+function extractActionItems(notes: Note[]): ActionItem[] {
+  const items: ActionItem[] = [];
+  const seen = new Set<string>();
+
+  for (const note of notes) {
+    const source = `${note.raw_text}
+${note.ai_summary ?? ''}`;
+    const sentences = source
+      .split(/[.!?。！？\n]+|(?<=요)\s+|(?<=다)\s+/)
+      .map((part) => part.trim())
+      .filter(Boolean);
+
+    for (const sentence of sentences) {
+      if (!looksLikeActionSentence(sentence)) continue;
+      const title = makeActionTitle(sentence);
+      if (!title) continue;
+      const dedupeKey = `${note.id}:${normalizeActionText(title)}`;
+      if (seen.has(dedupeKey)) continue;
+      seen.add(dedupeKey);
+      const due = inferActionDue(sentence, note.created_at);
+      items.push({
+        id: `action-${note.id}-${items.length}`,
+        title,
+        sourceText: sentence,
+        sourceNote: note,
+        dueLabel: due.dueLabel,
+        dueTimeLabel: due.dueTimeLabel,
+        dueStatus: due.status,
+        calendarReady: due.status === 'ready',
+      });
+      if (items.length >= 24) return items;
+    }
+  }
+
+  return items;
+}
+
+function looksLikeActionSentence(text: string) {
+  const compact = text.replace(/\s+/g, ' ');
+  if (compact.length < 4) return false;
+  return /(해야|해야지|해야 해|해놔|해둬|해두|하자|하기|보내야|확인해야|준비해야|예약해야|연락해야|사야|구매해야|제출해야|등록해야|신청해야|결제해야|마감|까지|보내기|확인하기|준비하기|예약하기|연락하기|제출하기)/.test(compact);
+}
+
+function makeActionTitle(text: string) {
+  let cleaned = text
+    .replace(/[“”"'`]/g, '')
+    .replace(/^(그리고|그래서|일단|아 그리고|그다음에)\s*/g, '')
+    .replace(/(해야겠다|해야겠어|해야지|해야 해|해야 한다|해야함|하기로 했다|할 것|할 일)$/g, '')
+    .trim();
+  cleaned = cleaned.replace(/\s+/g, ' ');
+  if (!cleaned) return '';
+  return cleaned.length > 32 ? `${cleaned.slice(0, 32)}...` : cleaned;
+}
+
+function normalizeActionText(text: string) {
+  return text.toLowerCase().replace(/\s+/g, '').replace(/[^0-9a-z가-힣]/g, '');
+}
+
+function inferActionDue(text: string, createdAt: string): { status: ActionDueStatus; dueLabel?: string; dueTimeLabel?: string } {
+  const dueLabel = inferDueDateLabel(text, createdAt);
+  const dueTimeLabel = inferDueTimeLabel(text);
+  if (dueLabel && dueTimeLabel) return { status: 'ready', dueLabel, dueTimeLabel };
+  if (dueLabel) return { status: 'date_only', dueLabel };
+  return { status: 'needs_due' };
+}
+
+function inferDueDateLabel(text: string, createdAt: string) {
+  if (/오늘/.test(text)) return '오늘';
+  if (/내일/.test(text)) return '내일';
+  if (/모레/.test(text)) return '모레';
+  if (/이번\s*주/.test(text)) return '이번 주';
+  if (/다음\s*주/.test(text)) return '다음 주';
+  const monthDay = text.match(/(\d{1,2})\s*월\s*(\d{1,2})\s*일/);
+  if (monthDay) return `${Number(monthDay[1])}월 ${Number(monthDay[2])}일`;
+  const numeric = text.match(/(\d{1,2})[./-](\d{1,2})/);
+  if (numeric) return `${Number(numeric[1])}월 ${Number(numeric[2])}일`;
+  if (/월요일|화요일|수요일|목요일|금요일|토요일|일요일/.test(text)) {
+    return text.match(/월요일|화요일|수요일|목요일|금요일|토요일|일요일/)?.[0];
+  }
+  if (/\d+\s*일\s*(안에|내로|까지)/.test(text)) {
+    return text.match(/\d+\s*일\s*(안에|내로|까지)/)?.[0];
+  }
+  return undefined;
+}
+
+function inferDueTimeLabel(text: string) {
+  const meridiemTime = text.match(/(오전|오후|아침|저녁|밤)\s*(\d{1,2})\s*시(?:\s*(\d{1,2})\s*분)?/);
+  if (meridiemTime) return `${meridiemTime[1]} ${Number(meridiemTime[2])}시${meridiemTime[3] ? ` ${Number(meridiemTime[3])}분` : ''}`;
+  const plainTime = text.match(/(?<!\d)(\d{1,2})\s*시(?:\s*(\d{1,2})\s*분)?/);
+  if (plainTime) return `${Number(plainTime[1])}시${plainTime[2] ? ` ${Number(plainTime[2])}분` : ''}`;
+  const colonTime = text.match(/(?<!\d)(\d{1,2}):(\d{2})(?!\d)/);
+  if (colonTime) return `${Number(colonTime[1])}:${colonTime[2]}`;
+  return undefined;
+}
+
 function groupNotesByDate(notes: Note[]): ArchiveDateGroup[] {
   const groups = new Map<string, ArchiveDateGroup>();
 
@@ -6266,6 +6441,114 @@ const styles = StyleSheet.create({
   },
   captureHintActive: {
     color: '#d94c3d',
+  },
+  todoHeroCard: {
+    backgroundColor: UI_THEME.color.surface,
+    borderColor: UI_THEME.color.border,
+    borderWidth: 1,
+    borderRadius: UI_THEME.radius.lg,
+    padding: 18,
+    gap: 10,
+    shadowColor: '#1e1712',
+    shadowOffset: { width: 0, height: 10 },
+    shadowOpacity: 0.06,
+    shadowRadius: 18,
+    elevation: 3,
+  },
+  todoHeroKicker: {
+    color: UI_THEME.color.coralDeep,
+    fontSize: 12,
+    fontWeight: '900',
+  },
+  todoHeroTitle: {
+    color: UI_THEME.color.text,
+    fontSize: 20,
+    lineHeight: 27,
+    fontWeight: '900',
+  },
+  todoHeroBody: {
+    color: UI_THEME.color.textSoft,
+    fontSize: 13,
+    lineHeight: 20,
+    fontWeight: '700',
+  },
+  todoStatsRow: {
+    flexDirection: 'row',
+    gap: 8,
+    marginTop: 4,
+  },
+  todoStatPill: {
+    flex: 1,
+    backgroundColor: UI_THEME.color.surfaceWarm,
+    borderColor: UI_THEME.color.border,
+    borderWidth: 1,
+    borderRadius: 14,
+    paddingVertical: 10,
+    alignItems: 'center',
+  },
+  todoStatNumber: {
+    color: UI_THEME.color.text,
+    fontSize: 17,
+    fontWeight: '900',
+  },
+  todoStatLabel: {
+    color: UI_THEME.color.textMuted,
+    fontSize: 11,
+    fontWeight: '900',
+    marginTop: 2,
+  },
+  todoListSection: {
+    gap: 10,
+  },
+  todoCard: {
+    backgroundColor: UI_THEME.color.surface,
+    borderColor: UI_THEME.color.border,
+    borderWidth: 1,
+    borderRadius: UI_THEME.radius.md,
+    padding: 15,
+    gap: 8,
+  },
+  todoCardTopRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    gap: 8,
+  },
+  todoStatusPill: {
+    color: UI_THEME.color.coralDeep,
+    backgroundColor: UI_THEME.color.coralSoft,
+    borderRadius: 999,
+    paddingHorizontal: 9,
+    paddingVertical: 4,
+    fontSize: 11,
+    fontWeight: '900',
+    overflow: 'hidden',
+  },
+  todoStatusReady: {
+    color: '#407150',
+    backgroundColor: '#edf8ef',
+  },
+  todoSourceTime: {
+    color: UI_THEME.color.textMuted,
+    fontSize: 11,
+    fontWeight: '800',
+  },
+  todoTitle: {
+    color: UI_THEME.color.text,
+    fontSize: 16,
+    lineHeight: 22,
+    fontWeight: '900',
+  },
+  todoMeta: {
+    color: UI_THEME.color.textSoft,
+    fontSize: 13,
+    fontWeight: '800',
+  },
+  todoSourceText: {
+    color: UI_THEME.color.textMuted,
+    fontSize: 12,
+    lineHeight: 18,
+    fontWeight: '700',
   },
   bottomTabs: {
     flexDirection: 'row',
