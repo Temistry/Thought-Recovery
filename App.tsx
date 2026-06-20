@@ -4,6 +4,7 @@ import type {
   ExpoSpeechRecognitionErrorEvent,
   ExpoSpeechRecognitionResultEvent,
 } from 'expo-speech-recognition/build/ExpoSpeechRecognitionModule.types';
+import * as Calendar from 'expo-calendar';
 import * as Clipboard from 'expo-clipboard';
 import * as FileSystem from 'expo-file-system/legacy';
 import * as Haptics from 'expo-haptics';
@@ -191,6 +192,7 @@ type ActionItem = {
   dueTimeLabel?: string;
   dueStatus: ActionDueStatus;
   calendarReady: boolean;
+  dueDate?: Date;
 };
 
 export default function App() {
@@ -223,6 +225,7 @@ export default function App() {
   const [thoughtFingerprint, setThoughtFingerprint] = useState<ThoughtFingerprintSnapshot | null>(null);
   const [draftGenerationState, setDraftGenerationState] = useState<Record<string, { loading: boolean; error?: string }>>({});
   const [noteRewriteInFlightId, setNoteRewriteInFlightId] = useState<string | null>(null);
+  const [calendarSavingActionId, setCalendarSavingActionId] = useState<string | null>(null);
   const migrationInFlightRef = useRef(false);
   const routingInFlightRef = useRef(false);
   const recordingRef = useRef<Audio.Recording | null>(null);
@@ -1381,6 +1384,41 @@ export default function App() {
   }
 
 
+  async function saveActionToCalendar(item: ActionItem) {
+    if (!item.dueDate) {
+      Alert.alert('시간 확인 필요', '캘린더에 저장하려면 날짜와 시간이 모두 필요합니다.');
+      return;
+    }
+
+    setCalendarSavingActionId(item.id);
+    try {
+      const permission = await Calendar.requestCalendarPermissionsAsync();
+      if (!permission.granted) {
+        Alert.alert('캘린더 권한 필요', '할 일을 캘린더에 저장하려면 캘린더 접근 권한을 허용해주세요.');
+        return;
+      }
+
+      const calendar = await getWritableEventCalendar();
+      const startDate = item.dueDate;
+      const endDate = new Date(startDate.getTime() + 30 * 60 * 1000);
+      await Calendar.createEventAsync(calendar.id, {
+        title: item.title,
+        notes: `생각회수기에서 분리한 할 일
+
+원문: ${item.sourceText}`,
+        startDate,
+        endDate,
+        allDay: false,
+        alarms: [{ relativeOffset: -10 }],
+      });
+      Alert.alert('캘린더에 저장됨', '10분 전 알림과 함께 캘린더에 추가했어요.');
+    } catch (error) {
+      showError('캘린더 저장 실패', error);
+    } finally {
+      setCalendarSavingActionId(null);
+    }
+  }
+
   async function rewriteOriginalNote(note: Note) {
     if (!supabase || !session?.user) {
       Alert.alert('로그인 필요', 'AI로 원본 메모를 다시 정리하려면 클라우드 로그인이 필요합니다.');
@@ -1535,7 +1573,13 @@ export default function App() {
           <Text style={styles.sectionTitle}>정리된 할 일</Text>
           {actionItems.length ? (
             actionItems.map((item) => (
-              <TodoActionCard key={item.id} item={item} onOpenSource={() => openNote(item.sourceNote)} />
+              <TodoActionCard
+                key={item.id}
+                item={item}
+                saving={calendarSavingActionId === item.id}
+                onOpenSource={() => openNote(item.sourceNote)}
+                onSaveToCalendar={() => saveActionToCalendar(item)}
+              />
             ))
           ) : (
             <View style={styles.todayEmptyCard}>
@@ -2104,7 +2148,7 @@ function BottomTabs({ activeTab, onChange }: { activeTab: AppTab; onChange: (tab
   );
 }
 
-function TodoActionCard({ item, onOpenSource }: { item: ActionItem; onOpenSource: () => void }) {
+function TodoActionCard({ item, saving, onOpenSource, onSaveToCalendar }: { item: ActionItem; saving: boolean; onOpenSource: () => void; onSaveToCalendar: () => void }) {
   const statusLabel = item.dueStatus === 'ready' ? '캘린더 후보' : item.dueStatus === 'date_only' ? '시간 확인 필요' : '마감 확인 필요';
   const question = item.dueStatus === 'ready'
     ? '캘린더 연결 준비됨'
@@ -2121,6 +2165,18 @@ function TodoActionCard({ item, onOpenSource }: { item: ActionItem; onOpenSource
       <Text style={styles.todoTitle}>{item.title}</Text>
       <Text style={styles.todoMeta}>{item.dueLabel ? `${item.dueLabel}${item.dueTimeLabel ? ` · ${item.dueTimeLabel}` : ''}` : question}</Text>
       <Text style={styles.todoSourceText} numberOfLines={2}>{`“${item.sourceText}”`}</Text>
+      {item.calendarReady ? (
+        <Pressable
+          style={[styles.todoCalendarButton, saving && styles.disabledButton]}
+          disabled={saving}
+          onPress={(event) => {
+            event.stopPropagation();
+            onSaveToCalendar();
+          }}
+        >
+          <Text style={styles.todoCalendarButtonText}>{saving ? '저장 중...' : '캘린더에 저장'}</Text>
+        </Pressable>
+      ) : null}
     </Pressable>
   );
 }
@@ -4411,6 +4467,17 @@ function makeDraftSummary(text: string) {
 }
 
 
+async function getWritableEventCalendar() {
+  const defaultCalendar = await Calendar.getDefaultCalendarAsync().catch(() => null);
+  if (defaultCalendar?.allowsModifications) return defaultCalendar;
+
+  const calendars = await Calendar.getCalendarsAsync(Calendar.EntityTypes.EVENT);
+  const writable = calendars.find((item) => item.allowsModifications && item.isPrimary)
+    ?? calendars.find((item) => item.allowsModifications);
+  if (!writable) throw new Error('수정 가능한 캘린더를 찾지 못했어요. 기기 캘린더 설정을 확인해주세요.');
+  return writable;
+}
+
 function extractActionItems(notes: Note[]): ActionItem[] {
   const items: ActionItem[] = [];
   const seen = new Set<string>();
@@ -4440,6 +4507,7 @@ ${note.ai_summary ?? ''}`;
         dueTimeLabel: due.dueTimeLabel,
         dueStatus: due.status,
         calendarReady: due.status === 'ready',
+        dueDate: due.dueDate,
       });
       if (items.length >= 24) return items;
     }
@@ -4469,41 +4537,101 @@ function normalizeActionText(text: string) {
   return text.toLowerCase().replace(/\s+/g, '').replace(/[^0-9a-z가-힣]/g, '');
 }
 
-function inferActionDue(text: string, createdAt: string): { status: ActionDueStatus; dueLabel?: string; dueTimeLabel?: string } {
-  const dueLabel = inferDueDateLabel(text, createdAt);
-  const dueTimeLabel = inferDueTimeLabel(text);
-  if (dueLabel && dueTimeLabel) return { status: 'ready', dueLabel, dueTimeLabel };
-  if (dueLabel) return { status: 'date_only', dueLabel };
+function inferActionDue(text: string, createdAt: string): { status: ActionDueStatus; dueLabel?: string; dueTimeLabel?: string; dueDate?: Date } {
+  const dueDateResult = inferDueDate(text, createdAt);
+  const dueTimeResult = inferDueTime(text);
+  if (dueDateResult && dueTimeResult) {
+    const dueDate = new Date(dueDateResult.date);
+    dueDate.setHours(dueTimeResult.hour, dueTimeResult.minute, 0, 0);
+    return { status: 'ready', dueLabel: dueDateResult.label, dueTimeLabel: dueTimeResult.label, dueDate };
+  }
+  if (dueDateResult) return { status: 'date_only', dueLabel: dueDateResult.label };
   return { status: 'needs_due' };
 }
 
-function inferDueDateLabel(text: string, createdAt: string) {
-  if (/오늘/.test(text)) return '오늘';
-  if (/내일/.test(text)) return '내일';
-  if (/모레/.test(text)) return '모레';
-  if (/이번\s*주/.test(text)) return '이번 주';
-  if (/다음\s*주/.test(text)) return '다음 주';
+function inferDueDate(text: string, createdAt: string): { label: string; date: Date } | undefined {
+  const base = new Date(createdAt);
+  const safeBase = Number.isNaN(base.getTime()) ? new Date() : base;
+  const atLocalMidnight = (offsetDays: number) => {
+    const date = new Date(safeBase);
+    date.setHours(0, 0, 0, 0);
+    date.setDate(date.getDate() + offsetDays);
+    return date;
+  };
+
+  if (/오늘/.test(text)) return { label: '오늘', date: atLocalMidnight(0) };
+  if (/내일/.test(text)) return { label: '내일', date: atLocalMidnight(1) };
+  if (/모레/.test(text)) return { label: '모레', date: atLocalMidnight(2) };
+
   const monthDay = text.match(/(\d{1,2})\s*월\s*(\d{1,2})\s*일/);
-  if (monthDay) return `${Number(monthDay[1])}월 ${Number(monthDay[2])}일`;
+  if (monthDay) return dateFromMonthDay(Number(monthDay[1]), Number(monthDay[2]), safeBase);
   const numeric = text.match(/(\d{1,2})[./-](\d{1,2})/);
-  if (numeric) return `${Number(numeric[1])}월 ${Number(numeric[2])}일`;
-  if (/월요일|화요일|수요일|목요일|금요일|토요일|일요일/.test(text)) {
-    return text.match(/월요일|화요일|수요일|목요일|금요일|토요일|일요일/)?.[0];
+  if (numeric) return dateFromMonthDay(Number(numeric[1]), Number(numeric[2]), safeBase);
+
+  const weekday = text.match(/월요일|화요일|수요일|목요일|금요일|토요일|일요일/)?.[0];
+  if (weekday) return { label: weekday, date: nextWeekdayDate(weekday, safeBase) };
+
+  const relativeDays = text.match(/(\d+)\s*일\s*(안에|내로|까지)/);
+  if (relativeDays) {
+    const days = Number(relativeDays[1]);
+    return { label: relativeDays[0], date: atLocalMidnight(Number.isFinite(days) ? days : 0) };
   }
-  if (/\d+\s*일\s*(안에|내로|까지)/.test(text)) {
-    return text.match(/\d+\s*일\s*(안에|내로|까지)/)?.[0];
-  }
+
+  if (/이번\s*주/.test(text)) return { label: '이번 주', date: atLocalMidnight(7 - safeBase.getDay()) };
+  if (/다음\s*주/.test(text)) return { label: '다음 주', date: atLocalMidnight(14 - safeBase.getDay()) };
+
   return undefined;
 }
 
-function inferDueTimeLabel(text: string) {
+function dateFromMonthDay(month: number, day: number, base: Date) {
+  const date = new Date(base.getFullYear(), month - 1, day);
+  if (date.getTime() < base.getTime()) date.setFullYear(date.getFullYear() + 1);
+  return { label: `${month}월 ${day}일`, date };
+}
+
+function nextWeekdayDate(weekday: string, base: Date) {
+  const weekdayIndex: Record<string, number> = { 일요일: 0, 월요일: 1, 화요일: 2, 수요일: 3, 목요일: 4, 금요일: 5, 토요일: 6 };
+  const target = weekdayIndex[weekday] ?? base.getDay();
+  const date = new Date(base);
+  date.setHours(0, 0, 0, 0);
+  const diff = (target - base.getDay() + 7) % 7 || 7;
+  date.setDate(date.getDate() + diff);
+  return date;
+}
+
+function inferDueTime(text: string): { label: string; hour: number; minute: number } | undefined {
   const meridiemTime = text.match(/(오전|오후|아침|저녁|밤)\s*(\d{1,2})\s*시(?:\s*(\d{1,2})\s*분)?/);
-  if (meridiemTime) return `${meridiemTime[1]} ${Number(meridiemTime[2])}시${meridiemTime[3] ? ` ${Number(meridiemTime[3])}분` : ''}`;
+  if (meridiemTime) {
+    const meridiem = meridiemTime[1];
+    let hour = Number(meridiemTime[2]);
+    const minute = meridiemTime[3] ? Number(meridiemTime[3]) : 0;
+    if ((meridiem === '오후' || meridiem === '저녁' || meridiem === '밤') && hour < 12) hour += 12;
+    if ((meridiem === '오전' || meridiem === '아침') && hour === 12) hour = 0;
+    if (!isValidTime(hour, minute)) return undefined;
+    return { label: `${meridiem} ${Number(meridiemTime[2])}시${meridiemTime[3] ? ` ${minute}분` : ''}`, hour, minute };
+  }
+
   const plainTime = text.match(/(?<!\d)(\d{1,2})\s*시(?:\s*(\d{1,2})\s*분)?/);
-  if (plainTime) return `${Number(plainTime[1])}시${plainTime[2] ? ` ${Number(plainTime[2])}분` : ''}`;
+  if (plainTime) {
+    const hour = Number(plainTime[1]);
+    const minute = plainTime[2] ? Number(plainTime[2]) : 0;
+    if (!isValidTime(hour, minute)) return undefined;
+    return { label: `${hour}시${plainTime[2] ? ` ${minute}분` : ''}`, hour, minute };
+  }
+
   const colonTime = text.match(/(?<!\d)(\d{1,2}):(\d{2})(?!\d)/);
-  if (colonTime) return `${Number(colonTime[1])}:${colonTime[2]}`;
+  if (colonTime) {
+    const hour = Number(colonTime[1]);
+    const minute = Number(colonTime[2]);
+    if (!isValidTime(hour, minute)) return undefined;
+    return { label: `${hour}:${colonTime[2]}`, hour, minute };
+  }
+
   return undefined;
+}
+
+function isValidTime(hour: number, minute: number) {
+  return Number.isInteger(hour) && Number.isInteger(minute) && hour >= 0 && hour <= 23 && minute >= 0 && minute <= 59;
 }
 
 function groupNotesByDate(notes: Note[]): ArchiveDateGroup[] {
@@ -6549,6 +6677,19 @@ const styles = StyleSheet.create({
     fontSize: 12,
     lineHeight: 18,
     fontWeight: '700',
+  },
+  todoCalendarButton: {
+    alignSelf: 'flex-start',
+    backgroundColor: UI_THEME.color.coral,
+    borderRadius: 999,
+    paddingHorizontal: 13,
+    paddingVertical: 8,
+    marginTop: 2,
+  },
+  todoCalendarButtonText: {
+    color: '#fff',
+    fontSize: 12,
+    fontWeight: '900',
   },
   bottomTabs: {
     flexDirection: 'row',

@@ -28,6 +28,12 @@
     "plugins": [
       "expo-sqlite",
       [
+        "expo-calendar",
+        {
+          "calendarPermission": "할 일을 캘린더에 저장하고 알림을 연결하기 위해 캘린더 접근 권한을 사용합니다."
+        }
+      ],
+      [
         "expo-speech-recognition",
         {
           "microphonePermission": "생각을 음성 메모로 남기기 위해 마이크를 사용합니다.",
