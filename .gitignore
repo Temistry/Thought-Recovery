@@ -6,10 +6,15 @@ node_modules/
 # Expo
 .expo/
 dist/
+dist-web/
 web-build/
 expo-env.d.ts
 .openclaw-logs/
 supabase/.temp/
+
+# local tunnel/runtime artifacts
+expo-tunnel*.log
+run-expo-tunnel.cmd
 
 # Native
 .kotlin/
