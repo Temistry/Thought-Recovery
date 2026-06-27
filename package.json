@@ -30,7 +30,12 @@
     "android": "expo start --android",
     "ios": "expo start --ios",
     "web": "expo start --web",
-    "postinstall": "node scripts/fix-metro-watch.js"
+    "postinstall": "node scripts/fix-metro-watch.js",
+    "typecheck": "tsc --noEmit"
   },
-  "private": true
+  "private": true,
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ]
 }
