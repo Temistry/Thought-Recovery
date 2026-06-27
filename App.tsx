@@ -46,6 +46,7 @@ const RETRIEVAL_FEEDBACK_KEY = 'idea-second-brain:retrieval-feedback';
 const COPY_FEEDBACK_MS = 1400;
 const ARCHIVE_PAGE_SIZE = 24;
 const THOUGHT_FLOW_FINGERPRINT_KEY = 'idea-second-brain:thought-flow-fingerprint:v1';
+const USER_API_SETTINGS_KEY = 'idea-second-brain:user-api-settings:v1';
 const SCREEN_WIDTH = Dimensions.get('window').width;
 const MAX_RECORDING_MS = 20 * 60 * 1000;
 
@@ -85,6 +86,13 @@ async function setExclusiveAudioModeAsync(allowsRecordingIOS: boolean) {
 
 
 type AppTab = 'today' | 'organized' | 'todos' | 'archive';
+type AiProvider = 'openai' | 'anthropic';
+type UserApiSettings = {
+  activeProvider: AiProvider;
+  openaiKey: string;
+  anthropicKey: string;
+  updatedAt?: string;
+};
 type VoiceJobStatus = 'saving' | 'uploading' | 'transcribing' | 'done' | 'failed';
 type RetrievalFeedbackStatus = 'useful' | 'later' | 'hidden';
 type RetrievalFeedbackMap = Record<string, { status: RetrievalFeedbackStatus; updatedAt: string; usedCount: number }>;
@@ -220,6 +228,7 @@ export default function App() {
   const [trashNotes, setTrashNotes] = useState<Note[]>([]);
   const [showTrash, setShowTrash] = useState(false);
   const [showAccount, setShowAccount] = useState(false);
+  const [apiSettings, setApiSettings] = useState<UserApiSettings>({ activeProvider: 'openai', openaiKey: '', anthropicKey: '' });
   const [retrievalFeedback, setRetrievalFeedback] = useState<RetrievalFeedbackMap>({});
   const [generatedDrafts, setGeneratedDrafts] = useState<Record<string, MergedThoughtDraft>>({});
   const [thoughtFingerprint, setThoughtFingerprint] = useState<ThoughtFingerprintSnapshot | null>(null);
@@ -238,6 +247,9 @@ export default function App() {
   const userEmail = session?.user?.email ?? '';
   const userInitial = userEmail.trim().charAt(0).toUpperCase() || '나';
   const isCapturingVoice = !!recording || basicTranscriptionActive;
+  const activeApiKey = apiSettings.activeProvider === 'openai' ? apiSettings.openaiKey : apiSettings.anthropicKey;
+  const canUseUserAi = activeApiKey.trim().length > 0;
+  const activeApiLabel = canUseUserAi ? (apiSettings.activeProvider === 'openai' ? 'OpenAI 연결됨' : 'Anthropic 연결됨') : 'API key 필요';
 
   const statusLabel = useMemo(() => {
     if (!cloudMode) return '로컬 테스트 중';
@@ -325,6 +337,44 @@ export default function App() {
   useEffect(() => {
     void loadNotes();
   }, [loadNotes, session?.user?.id]);
+
+  useEffect(() => {
+    let cancelled = false;
+    AsyncStorage.getItem(USER_API_SETTINGS_KEY)
+      .then((raw) => {
+        if (cancelled || !raw) return;
+        const parsed = JSON.parse(raw) as Partial<UserApiSettings>;
+        setApiSettings({
+          activeProvider: parsed.activeProvider === 'anthropic' ? 'anthropic' : 'openai',
+          openaiKey: typeof parsed.openaiKey === 'string' ? parsed.openaiKey : '',
+          anthropicKey: typeof parsed.anthropicKey === 'string' ? parsed.anthropicKey : '',
+          updatedAt: typeof parsed.updatedAt === 'string' ? parsed.updatedAt : undefined,
+        });
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  async function saveApiSettings(nextSettings: UserApiSettings) {
+    const next = { ...nextSettings, updatedAt: new Date().toISOString() };
+    setApiSettings(next);
+    await AsyncStorage.setItem(USER_API_SETTINGS_KEY, JSON.stringify(next));
+  }
+
+  function openApiSettings() {
+    setShowAccount(true);
+  }
+
+  function requireUserAiSettings(actionLabel: string) {
+    if (canUseUserAi) return true;
+    Alert.alert('API key가 필요해요', `${actionLabel} 기능은 내 API key를 설정한 뒤 사용할 수 있어요.`, [
+      { text: '나중에', style: 'cancel' },
+      { text: '설정 열기', onPress: openApiSettings },
+    ]);
+    return false;
+  }
 
   useEffect(() => {
     let cancelled = false;
@@ -620,6 +670,7 @@ export default function App() {
   }
 
   async function toggleVoiceCapture() {
+    if (!isCapturingVoice && !requireUserAiSettings('녹음과 AI 전사')) return;
     if (isCapturingVoice) {
       if (basicTranscriptionRef.current.active) {
         await stopBasicTranscription();
@@ -1242,7 +1293,7 @@ export default function App() {
 
 
   async function routePendingNotes({ skipSelected }: { skipSelected: boolean }) {
-    if (!canUseCloud || !supabase || !session?.user || routingInFlightRef.current) return;
+    if (!canUseUserAi || !canUseCloud || !supabase || !session?.user || routingInFlightRef.current) return;
 
     const pending = notes.filter(
       (note) =>
@@ -1272,6 +1323,10 @@ export default function App() {
   }
 
   async function routeNote(noteId: string, options: { quiet?: boolean } = {}) {
+    if (!canUseUserAi) {
+      if (!options.quiet) requireUserAiSettings('AI 정리');
+      return;
+    }
     if (!supabase || !session?.user) return;
 
     try {
@@ -1300,6 +1355,7 @@ export default function App() {
   }
 
   async function organizeNote(noteId: string) {
+    if (!requireUserAiSettings('AI 정리')) return;
     if (!supabase || !session?.user) return;
 
     try {
@@ -1337,6 +1393,7 @@ export default function App() {
 
 
   async function generateMergedThoughtDraft(flow: ThoughtFlow) {
+    if (!requireUserAiSettings('생각 리포트 생성')) return;
     if (!supabase || !session?.user) {
       Alert.alert('로그인 필요', 'AI로 합친 메모 초안을 만들려면 클라우드 로그인이 필요합니다.');
       return;
@@ -1420,6 +1477,7 @@ export default function App() {
   }
 
   async function rewriteOriginalNote(note: Note) {
+    if (!requireUserAiSettings('AI 재정리')) return;
     if (!supabase || !session?.user) {
       Alert.alert('로그인 필요', 'AI로 원본 메모를 다시 정리하려면 클라우드 로그인이 필요합니다.');
       return;
@@ -1478,6 +1536,8 @@ export default function App() {
         <TodayRecorderCard
           recording={isCapturingVoice}
           saving={saving}
+          locked={!canUseUserAi}
+          apiStatusLabel={activeApiLabel}
           recordingElapsedMs={recordingElapsedMs}
           maxRecordingMs={MAX_RECORDING_MS}
           onToggleRecording={toggleVoiceCapture}
@@ -1747,15 +1807,18 @@ export default function App() {
         />
       );
     }
-    if (showAccount && session?.user) {
+    if (showAccount) {
       return (
         <View style={styles.navigationStack}>
           {renderPreviousScreenLayer()}
           <AccountScreen
             email={userEmail}
-            userId={session.user.id}
+            userId={session?.user?.id ?? 'local-device'}
+            cloudEnabled={!!session?.user}
+            apiSettings={apiSettings}
+            onSaveApiSettings={saveApiSettings}
             onBack={() => setShowAccount(false)}
-            onSignOut={signOut}
+            onSignOut={session?.user ? signOut : undefined}
           />
         </View>
       );
@@ -1846,16 +1909,34 @@ export default function App() {
 function AccountScreen({
   email,
   userId,
+  cloudEnabled,
+  apiSettings,
+  onSaveApiSettings,
   onBack,
   onSignOut,
 }: {
   email: string;
   userId: string;
+  cloudEnabled: boolean;
+  apiSettings: UserApiSettings;
+  onSaveApiSettings: (settings: UserApiSettings) => Promise<void>;
   onBack: () => void;
-  onSignOut: () => void;
+  onSignOut?: () => void;
 }) {
   const shortUserId = userId.length > 12 ? `${userId.slice(0, 8)}…${userId.slice(-4)}` : userId;
-  const displayName = email ? email.split('@')[0] : '나';
+  const displayName = email ? email.split('@')[0] : '로컬 사용자';
+  const [draftSettings, setDraftSettings] = useState<UserApiSettings>(apiSettings);
+  const [savingApiSettings, setSavingApiSettings] = useState(false);
+  const activeDraftKey = draftSettings.activeProvider === 'openai' ? draftSettings.openaiKey : draftSettings.anthropicKey;
+
+  async function saveDraftApiSettings() {
+    setSavingApiSettings(true);
+    try {
+      await onSaveApiSettings(draftSettings);
+    } finally {
+      setSavingApiSettings(false);
+    }
+  }
 
   return (
     <View style={styles.accountSheetShell}>
@@ -1871,9 +1952,43 @@ function AccountScreen({
         </View>
 
         <SettingsSection title="계정">
-          <SettingsRow icon="✉" label="이메일" value={email} hideChevron />
-          <SettingsRow icon="↔" label="동기화" value="켜짐" hideChevron />
+          <SettingsRow icon="✉" label="이메일" value={email || '로그인 안 함'} hideChevron />
+          <SettingsRow icon="↔" label="동기화" value={cloudEnabled ? '클라우드 켜짐' : '로컬 전용'} hideChevron />
           <SettingsRow icon="#" label="사용자 ID" value={shortUserId} hideChevron />
+        </SettingsSection>
+
+        <SettingsSection title="AI 연결">
+          <View style={styles.apiSettingsCard}>
+            <View style={styles.apiProviderRow}>
+              {(['openai', 'anthropic'] as AiProvider[]).map((provider) => {
+                const selected = draftSettings.activeProvider === provider;
+                return (
+                  <Pressable
+                    key={provider}
+                    style={[styles.apiProviderChip, selected && styles.apiProviderChipActive]}
+                    onPress={() => setDraftSettings((current) => ({ ...current, activeProvider: provider }))}
+                  >
+                    <Text style={[styles.apiProviderChipText, selected && styles.apiProviderChipTextActive]}>
+                      {provider === 'openai' ? 'OpenAI' : 'Anthropic'}
+                    </Text>
+                  </Pressable>
+                );
+              })}
+            </View>
+            <TextInput
+              style={styles.apiKeyInput}
+              value={activeDraftKey}
+              onChangeText={(value) => setDraftSettings((current) => current.activeProvider === 'openai' ? { ...current, openaiKey: value } : { ...current, anthropicKey: value })}
+              placeholder={draftSettings.activeProvider === 'openai' ? 'sk-...' : 'sk-ant-...'}
+              autoCapitalize="none"
+              autoCorrect={false}
+              secureTextEntry
+            />
+            <Text style={styles.apiSettingsHint}>기기 안에만 저장하고 동기화하지 않습니다. 비워두면 녹음과 AI 정리가 잠깁니다.</Text>
+            <Pressable style={[styles.apiSaveButton, savingApiSettings && styles.disabledButton]} onPress={saveDraftApiSettings} disabled={savingApiSettings}>
+              <Text style={styles.apiSaveButtonText}>{savingApiSettings ? '저장 중...' : 'API key 저장'}</Text>
+            </Pressable>
+          </View>
         </SettingsSection>
 
         <SettingsSection title="데이터">
@@ -1885,10 +2000,12 @@ function AccountScreen({
           <SettingsRow icon="ⓘ" label="생각회수기" value="MVP" hideChevron />
         </SettingsSection>
 
-        <Pressable style={styles.accountLogoutRow} onPress={onSignOut}>
-          <Text style={styles.accountLogoutIcon}>↪</Text>
-          <Text style={styles.accountLogoutText}>로그아웃</Text>
-        </Pressable>
+        {onSignOut ? (
+          <Pressable style={styles.accountLogoutRow} onPress={onSignOut}>
+            <Text style={styles.accountLogoutIcon}>↪</Text>
+            <Text style={styles.accountLogoutText}>로그아웃</Text>
+          </Pressable>
+        ) : null}
       </ScrollView>
     </View>
   );
@@ -2059,20 +2176,26 @@ function SpringPressable({
 function TodayRecorderCard({
   recording,
   saving,
+  locked,
+  apiStatusLabel,
   recordingElapsedMs,
   maxRecordingMs,
   onToggleRecording,
 }: {
   recording: boolean;
   saving: boolean;
+  locked: boolean;
+  apiStatusLabel: string;
   recordingElapsedMs: number;
   maxRecordingMs: number;
   onToggleRecording: () => void;
 }) {
   const remainingMs = Math.max(0, maxRecordingMs - recordingElapsedMs);
   const progress = maxRecordingMs ? Math.min(1, recordingElapsedMs / maxRecordingMs) : 0;
-  const heroTitle = recording ? '지금 말하는 중' : saving ? '생각을 받았어요' : '떠오른 생각을 그냥 말하세요';
-  const heroHint = recording
+  const heroTitle = locked ? 'API key를 연결하면 녹음이 열려요' : recording ? '지금 말하는 중' : saving ? '생각을 받았어요' : '떠오른 생각을 그냥 말하세요';
+  const heroHint = locked
+    ? '내 OpenAI 또는 Anthropic key를 설정하면 이 기기에서 AI 전사를 시작합니다.'
+    : recording
     ? remainingMs <= 30 * 1000
       ? '곧 자동으로 정리돼요'
       : '끝내면 자동으로 정리돼요'
@@ -2083,7 +2206,7 @@ function TodayRecorderCard({
   return (
     <View style={[styles.todayRecorderCard, recording && styles.todayRecorderCardActive]}>
       <View style={styles.todayHeroCopy}>
-        <Text style={styles.todayPromptPill}>{recording ? '녹음 중' : saving ? '정리 중' : '말하면 남아요'}</Text>
+        <Text style={styles.todayPromptPill}>{locked ? apiStatusLabel : recording ? '녹음 중' : saving ? '정리 중' : '말하면 남아요'}</Text>
         <Text style={styles.todayHeroTitle}>{heroTitle}</Text>
         <Text style={styles.todayHeroHint}>{heroHint}</Text>
       </View>
@@ -2097,7 +2220,7 @@ function TodayRecorderCard({
       >
         <View style={[styles.todayMicHaloOuter, recording && styles.todayMicHaloOuterActive]}>
           <View style={[styles.todayMicHaloInner, recording && styles.todayMicHaloInnerActive]}>
-            <Text style={styles.todayMicIcon}>{recording ? '■' : '🎙️'}</Text>
+            <Text style={styles.todayMicIcon}>{locked ? '🔑' : recording ? '■' : '🎙️'}</Text>
           </View>
         </View>
       </Pressable>
@@ -2116,7 +2239,7 @@ function TodayRecorderCard({
         </>
       ) : null}
 
-      <Text style={styles.todayRecorderSubtitle}>{recording ? '끝내기' : saving ? '정리 중...' : '탭해서 말하기'}</Text>
+      <Text style={styles.todayRecorderSubtitle}>{locked ? '탭해서 설정 열기' : recording ? '끝내기' : saving ? '정리 중...' : '탭해서 말하기'}</Text>
     </View>
   );
 }
@@ -5051,6 +5174,59 @@ const styles = StyleSheet.create({
     fontSize: 30,
     fontWeight: '300',
     marginLeft: -4,
+  },
+  apiSettingsCard: {
+    padding: 18,
+    gap: 12,
+  },
+  apiProviderRow: {
+    flexDirection: 'row',
+    gap: 8,
+  },
+  apiProviderChip: {
+    flex: 1,
+    borderRadius: 999,
+    paddingVertical: 10,
+    alignItems: 'center',
+    backgroundColor: '#f0eff5',
+  },
+  apiProviderChipActive: {
+    backgroundColor: '#171412',
+  },
+  apiProviderChipText: {
+    color: '#7f7a80',
+    fontSize: 14,
+    fontWeight: '900',
+  },
+  apiProviderChipTextActive: {
+    color: '#fffaf6',
+  },
+  apiKeyInput: {
+    minHeight: 50,
+    borderRadius: 16,
+    backgroundColor: '#f8f5f1',
+    paddingHorizontal: 14,
+    color: '#171412',
+    fontSize: 15,
+    fontWeight: '700',
+  },
+  apiSettingsHint: {
+    color: '#7f7a80',
+    fontSize: 13,
+    lineHeight: 19,
+    fontWeight: '600',
+  },
+  apiSaveButton: {
+    minHeight: 48,
+    borderRadius: 16,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#ff625f',
+  },
+  apiSaveButtonText: {
+    color: '#fffaf6',
+    fontSize: 15,
+    fontWeight: '900',
   },
   accountLogoutRow: {
     minHeight: 58,
