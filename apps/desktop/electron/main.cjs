@@ -1,11 +1,14 @@
 const { app, BrowserWindow, dialog, ipcMain } = require('electron');
 const fs = require('fs');
+const http = require('http');
 const os = require('os');
 const path = require('path');
 
 const isDev = process.env.DESKTOP_DEV_SERVER_URL;
 const MANIFEST_FILE = 'manifest.json';
 const VAULT_DIRS = ['notes', 'reports', path.join('attachments', 'audio')];
+const MAX_SYNC_BODY_BYTES = 12 * 1024 * 1024;
+let activeSyncServer = null;
 
 function createWindow() {
   const mainWindow = new BrowserWindow({
@@ -30,11 +33,15 @@ function createWindow() {
 }
 
 app.whenReady().then(() => {
-  ipcMain.handle('desktop:create-sync-session', async () => ({
-    sessionId: `local-${Date.now().toString(36)}`,
-    expiresAt: Date.now() + 5 * 60 * 1000,
-    deviceName: os.hostname(),
-  }));
+  ipcMain.handle('desktop:create-sync-session', async (_event, vaultPath) => {
+    if (!vaultPath) throw new Error('Vault path is required');
+    return startLocalSyncServer(vaultPath);
+  });
+
+  ipcMain.handle('desktop:stop-sync-session', async () => {
+    stopLocalSyncServer();
+    return { stopped: true };
+  });
 
   ipcMain.handle('desktop:create-default-vault', async () => {
     const vaultPath = path.join(app.getPath('documents'), 'Thought Recovery Vault');
@@ -96,8 +103,114 @@ app.whenReady().then(() => {
 });
 
 app.on('window-all-closed', () => {
+  stopLocalSyncServer();
   if (process.platform !== 'darwin') app.quit();
 });
+
+function startLocalSyncServer(vaultPath) {
+  ensureVault(vaultPath);
+  stopLocalSyncServer();
+
+  const token = createSessionToken();
+  const expiresAt = Date.now() + 5 * 60 * 1000;
+  const server = http.createServer((request, response) => {
+    handleSyncRequest({ request, response, vaultPath, token, expiresAt });
+  });
+
+  server.listen(0, '0.0.0.0');
+  const address = server.address();
+  if (!address || typeof address === 'string') throw new Error('Failed to start local sync server');
+  const host = getPrimaryLanAddress();
+  const url = `http://${host}:${address.port}/sync/${token}`;
+  const timer = setTimeout(() => stopLocalSyncServer(), Math.max(0, expiresAt - Date.now()));
+  activeSyncServer = { server, timer, token, expiresAt, url, vaultPath };
+  return {
+    sessionId: token,
+    url,
+    expiresAt,
+    deviceName: os.hostname(),
+  };
+}
+
+function stopLocalSyncServer() {
+  if (!activeSyncServer) return;
+  clearTimeout(activeSyncServer.timer);
+  activeSyncServer.server.close();
+  activeSyncServer = null;
+}
+
+function handleSyncRequest({ request, response, vaultPath, token, expiresAt }) {
+  setCorsHeaders(response);
+  if (request.method === 'OPTIONS') {
+    response.writeHead(204);
+    response.end();
+    return;
+  }
+  if (request.method === 'GET' && request.url === `/sync/${token}/status`) {
+    writeJson(response, 200, { ok: true, expiresAt, deviceName: os.hostname() });
+    return;
+  }
+  if (request.method !== 'POST' || request.url !== `/sync/${token}`) {
+    writeJson(response, 404, { ok: false, error: 'Unknown sync endpoint' });
+    return;
+  }
+  if (Date.now() > expiresAt) {
+    writeJson(response, 410, { ok: false, error: 'Sync session expired' });
+    stopLocalSyncServer();
+    return;
+  }
+
+  let body = '';
+  let bytes = 0;
+  request.setEncoding('utf8');
+  request.on('data', (chunk) => {
+    bytes += Buffer.byteLength(chunk, 'utf8');
+    if (bytes > MAX_SYNC_BODY_BYTES) {
+      request.destroy(new Error('Sync package too large'));
+      return;
+    }
+    body += chunk;
+  });
+  request.on('end', () => {
+    try {
+      const syncPackage = JSON.parse(body);
+      const result = applySyncTransactionPackage(vaultPath, syncPackage);
+      writeJson(response, 200, { ok: true, transactionId: result.transactionId, applied: result.applied, counts: result.overview.counts });
+    } catch (error) {
+      writeJson(response, 400, { ok: false, error: error instanceof Error ? error.message : String(error) });
+    }
+  });
+  request.on('error', (error) => {
+    writeJson(response, 400, { ok: false, error: error instanceof Error ? error.message : String(error) });
+  });
+}
+
+function setCorsHeaders(response) {
+  response.setHeader('Access-Control-Allow-Origin', '*');
+  response.setHeader('Access-Control-Allow-Methods', 'GET,POST,OPTIONS');
+  response.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+}
+
+function writeJson(response, statusCode, payload) {
+  if (response.writableEnded) return;
+  setCorsHeaders(response);
+  response.writeHead(statusCode, { 'Content-Type': 'application/json; charset=utf-8' });
+  response.end(JSON.stringify(payload));
+}
+
+function getPrimaryLanAddress() {
+  const interfaces = os.networkInterfaces();
+  for (const addresses of Object.values(interfaces)) {
+    for (const address of addresses ?? []) {
+      if (address.family === 'IPv4' && !address.internal) return address.address;
+    }
+  }
+  return '127.0.0.1';
+}
+
+function createSessionToken() {
+  return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+}
 
 function ensureVault(vaultPath) {
   fs.mkdirSync(vaultPath, { recursive: true });

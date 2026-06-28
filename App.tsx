@@ -377,17 +377,43 @@ export default function App() {
     return false;
   }
 
-  async function exportDesktopSyncPackage() {
-    const exportResult = createVaultExportPackage({
+  function createDesktopSyncExport() {
+    return createVaultExportPackage({
       notes,
       drafts: generatedDrafts,
       sourceDeviceId: session?.user?.id ?? 'local-device',
     });
+  }
+
+  async function exportDesktopSyncPackage() {
+    const exportResult = createDesktopSyncExport();
     const payload = JSON.stringify(exportResult.syncPackage, null, 2);
     await Clipboard.setStringAsync(payload);
     Alert.alert(
       '데스크탑 동기화 패키지 복사됨',
       `${exportResult.summary.noteCount}개 메모와 ${exportResult.summary.reportCount}개 리포트를 데스크탑이 가져올 수 있는 JSON으로 복사했어요.`,
+    );
+  }
+
+  async function sendDesktopSyncPackage(syncUrl: string) {
+    const cleanUrl = syncUrl.trim();
+    if (!cleanUrl) {
+      Alert.alert('URL 필요', '데스크탑에서 연 수신 URL을 붙여넣어 주세요.');
+      return;
+    }
+    const exportResult = createDesktopSyncExport();
+    const response = await fetch(cleanUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(exportResult.syncPackage),
+    });
+    const result = await response.json().catch(() => null) as { ok?: boolean; error?: string; applied?: { upserts?: string[]; deletes?: string[] } } | null;
+    if (!response.ok || !result?.ok) {
+      throw new Error(result?.error || `전송 실패 (${response.status})`);
+    }
+    Alert.alert(
+      '데스크탑으로 보냈어요',
+      `${result.applied?.upserts?.length ?? exportResult.summary.fileCount}개 파일을 데스크탑 Vault에 적용했어요.`,
     );
   }
 
@@ -1833,6 +1859,7 @@ export default function App() {
             apiSettings={apiSettings}
             onSaveApiSettings={saveApiSettings}
             onExportDesktopSyncPackage={exportDesktopSyncPackage}
+            onSendDesktopSyncPackage={sendDesktopSyncPackage}
             onBack={() => setShowAccount(false)}
             onSignOut={session?.user ? signOut : undefined}
           />
@@ -1929,6 +1956,7 @@ function AccountScreen({
   apiSettings,
   onSaveApiSettings,
   onExportDesktopSyncPackage,
+  onSendDesktopSyncPackage,
   onBack,
   onSignOut,
 }: {
@@ -1938,6 +1966,7 @@ function AccountScreen({
   apiSettings: UserApiSettings;
   onSaveApiSettings: (settings: UserApiSettings) => Promise<void>;
   onExportDesktopSyncPackage: () => Promise<void>;
+  onSendDesktopSyncPackage: (syncUrl: string) => Promise<void>;
   onBack: () => void;
   onSignOut?: () => void;
 }) {
@@ -1946,6 +1975,8 @@ function AccountScreen({
   const [draftSettings, setDraftSettings] = useState<UserApiSettings>(apiSettings);
   const [savingApiSettings, setSavingApiSettings] = useState(false);
   const [exportingDesktopPackage, setExportingDesktopPackage] = useState(false);
+  const [sendingDesktopPackage, setSendingDesktopPackage] = useState(false);
+  const [desktopSyncUrl, setDesktopSyncUrl] = useState('');
   const activeDraftKey = draftSettings.activeProvider === 'openai' ? draftSettings.openaiKey : draftSettings.anthropicKey;
 
   async function saveDraftApiSettings() {
@@ -1963,6 +1994,17 @@ function AccountScreen({
       await onExportDesktopSyncPackage();
     } finally {
       setExportingDesktopPackage(false);
+    }
+  }
+
+  async function sendDesktopPackage() {
+    setSendingDesktopPackage(true);
+    try {
+      await onSendDesktopSyncPackage(desktopSyncUrl);
+    } catch (error) {
+      Alert.alert('전송 실패', error instanceof Error ? error.message : '데스크탑으로 보내지 못했어요.');
+    } finally {
+      setSendingDesktopPackage(false);
     }
   }
 
@@ -2022,8 +2064,19 @@ function AccountScreen({
         <SettingsSection title="데이터">
           <SettingsRow icon="▱" label="원본 보관" value="보관 탭" hideChevron />
           <SettingsRow icon="▤" label="상세 내보내기" value="메모 상세" hideChevron />
-          <Pressable style={[styles.apiSaveButton, exportingDesktopPackage && styles.disabledButton]} onPress={exportDesktopPackage} disabled={exportingDesktopPackage}>
-            <Text style={styles.apiSaveButtonText}>{exportingDesktopPackage ? '패키지 준비 중...' : '데스크탑 동기화 JSON 복사'}</Text>
+          <TextInput
+            style={styles.apiKeyInput}
+            value={desktopSyncUrl}
+            onChangeText={setDesktopSyncUrl}
+            placeholder="데스크탑 수신 URL"
+            autoCapitalize="none"
+            autoCorrect={false}
+          />
+          <Pressable style={[styles.apiSaveButton, sendingDesktopPackage && styles.disabledButton]} onPress={sendDesktopPackage} disabled={sendingDesktopPackage}>
+            <Text style={styles.apiSaveButtonText}>{sendingDesktopPackage ? '보내는 중...' : '데스크탑으로 보내기'}</Text>
+          </Pressable>
+          <Pressable style={[styles.apiSaveButtonSecondary, exportingDesktopPackage && styles.disabledButton]} onPress={exportDesktopPackage} disabled={exportingDesktopPackage}>
+            <Text style={styles.apiSaveButtonSecondaryText}>{exportingDesktopPackage ? '패키지 준비 중...' : 'JSON만 복사'}</Text>
           </Pressable>
         </SettingsSection>
 
@@ -5256,6 +5309,18 @@ const styles = StyleSheet.create({
   },
   apiSaveButtonText: {
     color: '#fffaf6',
+    fontSize: 15,
+    fontWeight: '900',
+  },
+  apiSaveButtonSecondary: {
+    minHeight: 48,
+    borderRadius: 16,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#f5ebe4',
+  },
+  apiSaveButtonSecondaryText: {
+    color: '#4b4038',
     fontSize: 15,
     fontWeight: '900',
   },
