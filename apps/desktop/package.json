@@ -8,13 +8,40 @@
     "dev": "vite --host 127.0.0.1",
     "electron": "electron .",
     "build": "vite build",
-    "dist:zip": "npm run build && node scripts/package-portable-zip.cjs"
+    "dist:zip": "npm run build && node scripts/package-portable-zip.cjs",
+    "dist:exe": "npm run build && electron-builder --win portable --x64"
   },
   "dependencies": {
     "@thought-recovery/core": "file:../../packages/core",
+    "qrcode": "^1.5.4"
+  },
+  "devDependencies": {
     "@vitejs/plugin-react": "latest",
-    "electron": "latest",
-    "qrcode": "^1.5.4",
-    "vite": "latest"
+    "electron": "42.5.0",
+    "electron-builder": "^26.15.3",
+    "vite": "^8.1.0"
+  },
+  "build": {
+    "appId": "ai.openclaw.thought-recovery.desktop",
+    "productName": "Thought Recovery",
+    "directories": {
+      "output": "../../release/desktop"
+    },
+    "files": [
+      "dist/**/*",
+      "electron/**/*",
+      "package.json"
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "portable",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "artifactName": "Thought-Recovery-Desktop-${version}-${arch}.${ext}"
+    }
   }
 }

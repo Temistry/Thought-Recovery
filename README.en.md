@@ -171,16 +171,16 @@ npx expo start --tunnel --clear
 npm run build --workspace @idea-second-brain/desktop
 ```
 
-Create a portable zip:
+Create a Windows EXE:
 
 ```bash
-npm run dist:zip --workspace @idea-second-brain/desktop
+npm run dist:exe --workspace @idea-second-brain/desktop
 ```
 
 Output path:
 
 ```text
-release/desktop/thought-recovery-desktop-win-portable.zip
+release/desktop/Thought-Recovery-Desktop-0.1.0-x64.exe
 ```
 
 ### 4. Sync mobile to desktop
@@ -255,8 +255,8 @@ npm run web
 # Build desktop app
 npm run build --workspace @idea-second-brain/desktop
 
-# Create desktop portable zip
-npm run dist:zip --workspace @idea-second-brain/desktop
+# Create desktop Windows EXE
+npm run dist:exe --workspace @idea-second-brain/desktop
 
 # Test desktop sync conflict policy
 node apps/desktop/scripts/test-sync-conflict.cjs

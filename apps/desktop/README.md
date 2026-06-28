@@ -27,13 +27,13 @@ Implemented:
 
 ```bash
 npm run build --workspace @idea-second-brain/desktop
-npm run dist:zip --workspace @idea-second-brain/desktop
+npm run dist:exe --workspace @idea-second-brain/desktop
 ```
 
-Portable preview output:
+Windows EXE output:
 
 ```text
-release/desktop/thought-recovery-desktop-win-portable.zip
+release/desktop/Thought-Recovery-Desktop-0.1.0-x64.exe
 ```
 
 ## Local mobile → desktop sync flow

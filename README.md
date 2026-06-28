@@ -170,16 +170,16 @@ npx expo start --tunnel --clear
 npm run build --workspace @idea-second-brain/desktop
 ```
 
-portable zip 생성:
+Windows EXE 생성:
 
 ```bash
-npm run dist:zip --workspace @idea-second-brain/desktop
+npm run dist:exe --workspace @idea-second-brain/desktop
 ```
 
 산출물 위치:
 
 ```text
-release/desktop/thought-recovery-desktop-win-portable.zip
+release/desktop/Thought-Recovery-Desktop-0.1.0-x64.exe
 ```
 
 ### 4. 모바일 → 데스크탑 동기화 사용법
@@ -254,8 +254,8 @@ npm run web
 # 데스크탑 빌드
 npm run build --workspace @idea-second-brain/desktop
 
-# 데스크탑 portable zip 생성
-npm run dist:zip --workspace @idea-second-brain/desktop
+# 데스크탑 Windows EXE 생성
+npm run dist:exe --workspace @idea-second-brain/desktop
 
 # 데스크탑 sync 충돌 정책 테스트
 node apps/desktop/scripts/test-sync-conflict.cjs
