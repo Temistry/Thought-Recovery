@@ -210,7 +210,7 @@ function App() {
             {lastApplyResult ? (
               <div className="sessionBox">
                 <strong>{lastApplyResult.transactionId}</strong>
-                <span>{lastApplyResult.applied.upserts.length} upsert · {lastApplyResult.applied.deletes.length} delete</span>
+                <span>{lastApplyResult.applied.upserts.length} upsert · {lastApplyResult.applied.deletes.length} delete · {(lastApplyResult.applied.skipped?.length ?? 0)} skipped</span>
               </div>
             ) : null}
           </article>

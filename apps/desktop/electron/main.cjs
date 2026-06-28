@@ -249,10 +249,17 @@ function applySyncTransactionPackage(vaultPath, syncPackage) {
   ensureVault(vaultPath);
   validateSyncPackageShape(syncPackage);
 
-  const applied = { upserts: [], deletes: [] };
+  const applied = { upserts: [], deletes: [], skipped: [] };
   for (const file of syncPackage.transaction.files) {
     const relativePath = normalizeVaultRelativePath(file.path);
     const targetPath = resolveVaultPath(vaultPath, relativePath);
+    const existingUpdatedAt = readExistingVaultUpdatedAt(targetPath);
+    const incomingUpdatedAt = parseTime(file.updatedAt) ?? parseTime(syncPackage.transaction.createdAt) ?? Date.now();
+    if (existingUpdatedAt !== null && existingUpdatedAt >= incomingUpdatedAt) {
+      applied.skipped.push({ path: relativePath, reason: 'existing-newer-or-same' });
+      continue;
+    }
+
     if (file.operation === 'delete') {
       if (fs.existsSync(targetPath)) fs.unlinkSync(targetPath);
       applied.deletes.push(relativePath);
@@ -333,6 +340,22 @@ function touchManifest(vaultPath) {
   const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
   manifest.updatedAt = new Date().toISOString();
   fs.writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, 'utf8');
+}
+
+function readExistingVaultUpdatedAt(targetPath) {
+  if (!fs.existsSync(targetPath) || !targetPath.toLowerCase().endsWith('.md')) return null;
+  const markdown = fs.readFileSync(targetPath, 'utf8').replace(/^\uFEFF/, '');
+  const frontmatterMatch = markdown.match(/^---\n([\s\S]*?)\n---/);
+  if (!frontmatterMatch) return null;
+  const updatedAtLine = frontmatterMatch[1].split('\n').find((line) => /^updatedAt:\s*/.test(line));
+  if (!updatedAtLine) return null;
+  const rawValue = updatedAtLine.replace(/^updatedAt:\s*/, '').trim().replace(/^['"]|['"]$/g, '');
+  return parseTime(rawValue);
+}
+
+function parseTime(value) {
+  const time = Date.parse(String(value ?? ''));
+  return Number.isFinite(time) ? time : null;
 }
 
 function normalizeVaultRelativePath(value) {
