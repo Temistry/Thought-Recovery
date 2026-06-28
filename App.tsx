@@ -2158,8 +2158,8 @@ function TrashScreen({
         <Text style={styles.sectionHint}>실수로 지운 생각을 복원하거나 완전히 삭제할 수 있어요.</Text>
         {notes.length ? notes.map((note) => (
           <View key={note.id} style={styles.trashNoteCard}>
-            <Text style={styles.relatedTitle}>{note.ai_title || makeDraftTitle(note.raw_text)}</Text>
-            <Text style={styles.noteSummary} numberOfLines={2}>{note.ai_summary || note.raw_text}</Text>
+            <Text style={styles.relatedTitle}>{note.ai_title || '정리 전 생각'}</Text>
+            <Text style={styles.noteSummary} numberOfLines={2}>{note.ai_summary || '요약을 준비 중이에요.'}</Text>
             <View style={styles.buttonRow}>
               <Pressable style={styles.secondaryButton} onPress={() => onRestore(note.id)}>
                 <Text style={styles.secondaryButtonText}>복원</Text>
@@ -2406,8 +2406,8 @@ function TodayThoughtMiniCard({ note, voiceJob, onPress }: { note: Note; voiceJo
   const isProcessing = voiceJob ? ['saving', 'uploading', 'transcribing'].includes(voiceJob.status) : isProcessingVoiceNote(note);
   const isFailed = voiceJob?.status === 'failed' || isFailedVoiceNote(note);
   const statusLabel = isFailed ? '확인 필요' : isProcessing ? '정리 중...' : '정리됨';
-  const title = isProcessing ? '방금 말한 생각' : note.ai_title || makeDraftTitle(note.raw_text);
-  const preview = isProcessing ? (voiceJob?.message ?? '전사와 정리를 이어가는 중이에요') : note.ai_summary || makeDraftSummary(note.raw_text);
+  const title = isProcessing ? '방금 말한 생각' : note.ai_title || '정리 전 생각';
+  const preview = isProcessing ? (voiceJob?.message ?? '전사와 정리를 이어가는 중이에요') : note.ai_summary || '요약을 준비 중이에요.';
 
   return (
     <Pressable style={[styles.todayMiniCard, isProcessing && styles.todayMiniCardProcessing, isFailed && styles.failedCard]} onPress={onPress}>
@@ -2426,8 +2426,8 @@ function ArchiveOriginalNoteCard({ note, voiceJob, onPress, onRetryVoice }: { no
   const isPersistedFailed = isFailedVoiceNote(note);
   const isFailed = voiceJob?.status === 'failed' || isPersistedFailed;
   const sourceLabel = note.source_type === 'voice' ? '음성' : '텍스트';
-  const title = isProcessing ? '방금 말한 원본' : note.ai_title || makeDraftTitle(note.raw_text);
-  const preview = isProcessing ? (voiceJob?.message ?? '전사와 정리를 이어가는 중이에요') : note.raw_text || note.ai_summary || '';
+  const title = isProcessing ? '방금 말한 생각' : note.ai_title || '정리 전 생각';
+  const preview = isProcessing ? (voiceJob?.message ?? '전사와 정리를 이어가는 중이에요') : note.ai_summary || '요약을 준비 중이에요.';
 
   return (
     <Pressable style={[styles.archiveOriginalCard, isProcessing && styles.todayMiniCardProcessing, isFailed && styles.failedCard]} onPress={onPress}>
@@ -2480,10 +2480,10 @@ function NoteCard({
         <Text style={styles.noteDate}>{formatDate(note.created_at)}</Text>
       </View>
       <Text style={styles.noteTitle} numberOfLines={2}>
-        {note.ai_title || makeDraftTitle(note.raw_text)}
+        {note.ai_title || '정리 전 생각'}
       </Text>
       <Text style={styles.noteSummary} numberOfLines={2}>
-        {note.ai_summary || makeDraftSummary(note.raw_text)}
+        {note.ai_summary || '요약을 준비 중이에요.'}
       </Text>
       {relatedCount > 0 ? (
         <View style={styles.rediscoveryPill}>
@@ -2976,7 +2976,7 @@ function ThoughtFlowDetailScreen({
 
         <View style={styles.detailSection}>
           <Pressable style={styles.collapsedSourcePill} onPress={() => setSourcesExpanded((value) => !value)}>
-            <Text style={styles.detailSectionTitle}>원문 보기</Text>
+            <Text style={styles.detailSectionTitle}>출처 요약</Text>
             <Text style={styles.expandReasonText}>{sourcesExpanded ? '접기' : '열기'}</Text>
           </Pressable>
           {sourcesExpanded ? (
@@ -2985,7 +2985,7 @@ function ThoughtFlowDetailScreen({
                 <Pressable key={note.id} style={styles.flowSourceNoteCard} onPress={() => onOpenNote(note)}>
                   <Text style={styles.flowSourceNoteIndex}>{index + 1}</Text>
                   <View style={styles.flowSourceNoteBody}>
-                    <Text style={styles.relatedTitle} numberOfLines={1}>{note.ai_title || makeDraftTitle(note.raw_text)}</Text>
+                    <Text style={styles.relatedTitle} numberOfLines={1}>{note.ai_title || `출처 ${index + 1}`}</Text>
                   </View>
                 </Pressable>
               ))}
@@ -3064,7 +3064,7 @@ function RetrievalCard({
           </View>
           <Text style={styles.noteDate}>{formatDate(note.created_at)}</Text>
         </View>
-        <CopyableText style={styles.noteTitle} copyValue={note.ai_title || makeDraftTitle(note.raw_text)}>{note.ai_title || makeDraftTitle(note.raw_text)}</CopyableText>
+        <CopyableText style={styles.noteTitle} copyValue={note.ai_title || '정리 전 생각'}>{note.ai_title || '정리 전 생각'}</CopyableText>
         <CopyableText style={styles.retrievalOneLine} copyValue={oneLine}>{oneLine}</CopyableText>
         <View style={styles.strengthRow}>
           <Text style={styles.strengthText}>{strength.label}</Text>
@@ -3221,12 +3221,12 @@ function NoteDetail({
 
   async function exportNote() {
     const markdown = buildNoteExportMarkdown(note, sourceLogs, relatedNotes);
-    const title = `${note.ai_title || makeDraftTitle(note.raw_text)}.md`;
+    const title = `${note.ai_title || '정리된 생각'}.md`;
 
     setExporting(true);
     try {
       if (Platform.OS === 'ios' && FileSystem.cacheDirectory) {
-        const fileUri = `${FileSystem.cacheDirectory}${makeSafeFileName(note.ai_title || makeDraftTitle(note.raw_text))}.md`;
+        const fileUri = `${FileSystem.cacheDirectory}${makeSafeFileName(note.ai_title || '정리된 생각')}.md`;
         await FileSystem.writeAsStringAsync(fileUri, markdown, { encoding: FileSystem.EncodingType.UTF8 });
         await Share.share({ title, url: fileUri });
       } else {
@@ -3263,8 +3263,8 @@ function NoteDetail({
         scrollIndicatorInsets={{ bottom: 180 }}
       >
       <View style={styles.detailHero}>
-        <Text style={styles.flowMergedKicker}>원본 생각</Text>
-        <CopyableText style={styles.detailTitle} copyValue={note.ai_title || makeDraftTitle(note.raw_text)}>{note.ai_title || makeDraftTitle(note.raw_text)}</CopyableText>
+        <Text style={styles.flowMergedKicker}>보관된 생각</Text>
+        <CopyableText style={styles.detailTitle} copyValue={note.ai_title || '정리 전 생각'}>{note.ai_title || '정리 전 생각'}</CopyableText>
         <View style={styles.noteMetaRow}>
           <View style={styles.noteMetaLeft}>
             <Text style={styles.noteType}>{note.source_type === 'voice' ? '🎙' : '✎'}</Text>
@@ -3278,7 +3278,7 @@ function NoteDetail({
             onPress={() => onRewriteNote(note)}
             disabled={rewriting || saving}
           >
-            <Text style={styles.noteRewriteButtonText}>{rewriting ? '정리 중...' : '원본 다시 정리하기'}</Text>
+            <Text style={styles.noteRewriteButtonText}>{rewriting ? '정리 중...' : '다시 정리하기'}</Text>
           </Pressable>
           <Pressable
             style={[styles.noteExportButton, exporting && styles.disabledButton]}
@@ -3307,71 +3307,21 @@ function NoteDetail({
         onRetryVoice={onRetryVoice}
       />
 
-      <View style={styles.threadSection}>
-        <View style={styles.threadHeaderRow}>
-          <Text style={styles.threadHeaderIcon}>전사 원문</Text>
-          <Pressable style={styles.iconActionButton} onPress={() => setLogsExpanded((value) => !value)}>
-            <Text style={styles.iconActionText}>{logsExpanded ? '⌃' : `＋${Math.max(0, sourceLogs.length - 1)}`}</Text>
-          </Pressable>
-        </View>
-        {(logsExpanded ? sourceLogs : sourceLogs.slice(0, 1)).map((log, index) => (
-          <ThreadLogItem
-            key={log.id}
-            log={log}
-            index={index}
-            expanded={logsExpanded}
-            saving={saving}
-            onDetachLog={onDetachLog}
-          />
-        ))}
-        {!logsExpanded && sourceLogs.length > 1 ? (
-          <Pressable style={styles.threadMoreButton} onPress={() => setLogsExpanded(true)}>
-            <Text style={styles.threadMoreText}>＋{sourceLogs.length - 1}</Text>
-          </Pressable>
-        ) : null}
-        <View style={styles.threadEditRow}>
-          <Pressable style={styles.iconActionButton} onPress={() => setIsEditing((value) => !value)} disabled={saving}>
-            <Text style={styles.iconActionText}>{isEditing ? '×' : '✎'}</Text>
-          </Pressable>
-        </View>
-        {isEditing ? (
-          <View style={styles.editBox}>
-            <TextInput
-              style={styles.editInput}
-              multiline
-              scrollEnabled
-              value={draftText}
-              onChangeText={setDraftText}
-              placeholder="생각 원문을 다듬어보세요"
-              textAlignVertical="top"
-            />
-            <Pressable
-              style={[styles.primaryButton, saving && styles.disabledButton]}
-              onPress={saveEdit}
-              disabled={saving || !draftText.trim()}
-            >
-              <Text style={styles.primaryButtonText}>{saving ? '저장 중...' : '저장하고 다시 정리'}</Text>
-            </Pressable>
-          </View>
-        ) : null}
-      </View>
-
-
       <View style={styles.originalSummaryCard}>
         <Text style={styles.originalSummaryLabel}>AI 요약</Text>
-        <CopyableText style={styles.detailSummary} copyValue={note.ai_summary || makeDraftSummary(note.raw_text)}>{note.ai_summary || makeDraftSummary(note.raw_text)}</CopyableText>
+        <CopyableText style={styles.detailSummary} copyValue={note.ai_summary || ''}>{note.ai_summary || '요약을 준비 중이에요.'}</CopyableText>
       </View>
 
       {relatedThoughtFlow ? (
         <Pressable style={styles.rediscoveryBanner} onPress={() => onOpenRelatedThoughtFlow(relatedThoughtFlow)} accessibilityLabel="연결된 생각 열기">
           <Text style={styles.rediscoveryBannerKicker}>연결된 생각</Text>
-          <Text style={styles.rediscoveryBannerTitle}>이어볼 만한 원본이 {relatedNotes.length}개 있어요</Text>
+          <Text style={styles.rediscoveryBannerTitle}>이어볼 만한 생각이 {relatedNotes.length}개 있어요</Text>
           <Text style={styles.rediscoveryBannerHint}>탭해서 자라난 생각으로 보기</Text>
         </Pressable>
       ) : null}
 
       <View style={styles.detailSection}>
-        <Text style={styles.detailSectionTitle}>연결된 원본</Text>
+        <Text style={styles.detailSectionTitle}>연결된 생각</Text>
         {relatedCandidates.length ? (
           relatedCandidates.map((candidate) => (
             <Pressable key={candidate.note.id} style={styles.relatedItem} onPress={() => onOpenRelated(candidate.note)}>
@@ -3396,7 +3346,7 @@ function NoteDetail({
             </Pressable>
           ))
         ) : (
-          <Text style={styles.emptyInline}>아직 이어진 원본이 없어요.</Text>
+          <Text style={styles.emptyInline}>아직 이어진 생각이 없어요.</Text>
         )}
       </View>
       </ScrollView>
@@ -3908,8 +3858,7 @@ function buildThoughtFlows(notes: Note[], feedback: RetrievalFeedbackMap, existi
   }
 
   const relatedPairFlows = buildRelatedPairThoughtFlows(visible, feedback, context);
-  const pinnedFlow = buildPinnedPlanningThoughtFlow(visible);
-  const allFlows = pinnedFlow ? [pinnedFlow, ...flows, ...relatedPairFlows] : [...flows, ...relatedPairFlows];
+  const allFlows = [...flows, ...relatedPairFlows];
 
   const sortedFlows = allFlows.sort(
     (a, b) => (b.confidenceScore ?? 0) - (a.confidenceScore ?? 0) || b.notes.length - a.notes.length,
@@ -4046,63 +3995,6 @@ function mostCommonConnectionTerms(notes: Note[], context: ConnectionCorpusConte
     .slice(0, 8);
 }
 
-function buildPinnedPlanningThoughtFlow(notes: Note[]): ThoughtFlow {
-  const titles = ['기획력이란 무엇인가', '엘시와 갈비스 대화 중계', '엘시 에더리 전략가 GPT'];
-  const now = new Date().toISOString();
-  const pinnedNotes = titles.map((title, index) => {
-    const found = notes.find((note) => {
-      const text = `${note.ai_title ?? ''} ${note.raw_text}`;
-      return text.includes(title);
-    });
-    if (found) return found;
-    return makeVirtualThoughtFlowNote(title, index, now);
-  });
-
-  return {
-    id: 'thought-flow-planning-is-judgment-system',
-    status: 'temporary',
-    title: '기획은 판단 시스템이다',
-    noteIds: pinnedNotes.map((note) => note.id),
-    notes: pinnedNotes,
-    mergedDraft: buildPinnedPlanningMergedDraft(pinnedNotes, now),
-    synthesis:
-      '원태님은 기획을 말이나 아이디어가 아니라, 기록된 생각을 다시 꺼내고 엘시GPT의 판단과 갈비스/OpenClaw/Codex의 실행 기록을 엮어 성공률을 높이는 시스템으로 보고 있어요.',
-    sharedProblem: '기획을 감각이 아니라 반복 가능한 판단 구조로 만들 수 있을까?',
-    whyNow:
-      '생각회수기의 제품 방향도 이 흐름과 닮아 있어요. 흩어진 생각을 다시 꺼내고, 판단으로 연결해서 성공률을 높이려는 시도이기 때문이에요.',
-    nextQuestion: '이 흐름을 생각회수기의 대표 사용 사례로 삼을 수 있을까?',
-    createdAt: pinnedNotes[pinnedNotes.length - 1]?.created_at ?? now,
-    updatedAt: pinnedNotes[0]?.updated_at ?? pinnedNotes[0]?.created_at ?? now,
-    sharedIntent: '기획 성공률을 높이는 판단 시스템을 만들려는 생각',
-    sharedDecisionAxis: '기획 성공률 판단',
-    confidenceScore: 0.95,
-  };
-}
-
-function buildPinnedPlanningMergedDraft(notes: Note[], now: string): MergedThoughtDraft {
-  return {
-    id: 'merged-draft-planning-is-judgment-system',
-    flowId: 'thought-flow-planning-is-judgment-system',
-    title: '메모앱의 본질은 “잊은 생각을 다시 만나게 하는 것”이다',
-    body:
-      '나는 계속 메모앱을 만들고 싶다고 말해왔다. 처음에는 그냥 아이디어를 저장하는 앱이라고 생각했다. 하지만 반복해서 나온 생각들을 보면, 내가 만들고 싶은 것은 단순한 메모장이 아니다.\n\n' +
-      '내가 원하는 것은 내가 지나가며 말했던 생각, 잊어버린 생각, 아직 정리되지 않은 생각을 다시 회수해주는 앱이다. 메모는 적는 순간보다 나중에 다시 만나는 순간에 가치가 생긴다. 그런데 지금까지의 기록은 자주 흘러가버렸다. 말로 남긴 생각도, 대화 중에 나온 판단도, 기획으로 이어질 수 있었던 조각들도 시간이 지나면 어디에 있었는지 찾기 어려웠다.\n\n' +
-      '예전에는 말은 많지만 문서로 남기지 않는 모습을 답답하게 봤다. 나는 문서로 보고 싶었다. 그런데 돌아보면 나도 크게 다르지 않았다. 나도 많은 생각을 말했고, 여러 번 같은 문제를 다시 꺼냈지만, 정작 그것이 하나의 기획 문서나 판단 구조로 잘 남지는 않았다. 결국 문제는 기록을 했느냐 안 했느냐만이 아니었다. 문제는 기록한 것들이 다시 나에게 돌아오지 않는다는 것이었다.\n\n' +
-      '그래서 이 앱이 해야 할 일은 단순 저장이 아니다. 내가 음성이나 텍스트로 아무렇게나 남긴 말을 읽고, 그것이 일정인지, 알림인지, 기록으로 남겨야 할 생각인지, 특정 사람이나 고양이, 프로젝트에 붙어야 할 정보인지 구분해야 한다. 시간이 지나면 사라져도 되는 정보와 나중에 다시 회수해야 할 반복 생각도 달라야 한다.\n\n' +
-      '사용자가 처음부터 카테고리를 정리하게 만들면 안 된다. 사람은 생각이 떠오르는 순간에 완벽한 분류 체계를 만들지 못한다. 먼저 흘려보내듯이 기록하고, 앱이 그 기록들을 보며 자동으로 묶어줘야 한다. 그렇게 되면 메모는 단순한 저장소가 아니라 나 자신에게 다시 보여주는 생각의 피드가 된다.\n\n' +
-      '나는 기록을 통해 내 인공지능부를 만들고 싶다. 내가 반복해서 말한 생각들, 아직 문서가 되지 못한 기획들, 흘러가버린 아이디어들을 앱이 다시 모아주면, 나는 내가 어떤 문제를 계속 바라보고 있었는지 알 수 있다. 이 앱의 핵심 가치는 기록이 아니다. 핵심 가치는 망각된 생각의 회수다.\n\n' +
-      '그리고 이 문제의 출발점에는 내 기획력에 대한 자각이 있다. 예전에는 기획이 입으로만 하는 것이라고 생각한 적도 있다. 하지만 이제는 안다. 기획은 말이 아니라 구조다. 생각을 기록하고, 분류하고, 다시 꺼내 보고, 행동으로 바꾸는 과정이다. 그래서 이 앱은 나에게도 필요하다. 내가 말로 흘려보낸 생각을 다시 붙잡고, 그것을 기획으로 바꾸기 위해서.',
-    judgmentSummary: [
-      '이 앱의 핵심 가치는 단순 기록이 아니라 망각된 생각의 회수다.',
-      '메모는 처음부터 분류하는 것이 아니라, 흘려보낸 뒤 다시 묶이고 확장되어야 한다.',
-      '기획은 말이 아니라 생각을 구조화하고 다시 행동으로 바꾸는 과정이다.',
-    ],
-    sourceNoteIds: notes.map((note) => note.id),
-    createdAt: now,
-    status: 'draft',
-  };
-}
-
 function buildFallbackMergedThoughtDraft(
   flowId: string,
   title: string,
@@ -4131,24 +4023,6 @@ function makeLocalFallbackNextQuestion(insights: string[], title: string) {
 function shortenLocalSentence(value: string) {
   const first = value.split(/[.!?。！？\n]/)[0]?.trim() || value.trim();
   return first.length > 54 ? `${first.slice(0, 54)}…` : first;
-}
-
-function makeVirtualThoughtFlowNote(title: string, index: number, now: string): Note {
-  const summaries = [
-    '기획력을 감각이 아니라 반복 가능한 판단 구조로 보려는 메모예요.',
-    '엘시GPT의 판단과 갈비스의 실행을 이어서 보는 대화 흐름이에요.',
-    '전략가 GPT를 통해 기획 판단의 품질을 높이려는 실험이에요.',
-  ];
-  return {
-    id: `sample-thought-flow-note-${index + 1}`,
-    raw_text: summaries[index] ?? title,
-    ai_title: title,
-    ai_summary: summaries[index] ?? title,
-    ai_tags: ['기획', '판단', '생각흐름'],
-    source_type: 'text',
-    created_at: now,
-    updated_at: now,
-  };
 }
 
 function slugifyFlowId(value: string) {
@@ -4181,17 +4055,13 @@ function normalizeFlowDedupeKey(title: string) {
 function buildThoughtFlowExportMarkdown(flow: ThoughtFlow) {
   const draft = flow.mergedDraft;
   const sourceSections = flow.notes.map((note, index) => {
-    const title = note.ai_title || makeDraftTitle(note.raw_text);
-    const summary = note.ai_summary || makeDraftSummary(note.raw_text);
+    const title = note.ai_title || `출처 ${index + 1}`;
+    const summary = note.ai_summary || '요약을 준비 중이에요.';
     return [
       `### ${index + 1}. ${title}`,
       '',
       `- 날짜: ${formatDate(note.created_at)}`,
       `- 요약: ${summary}`,
-      '',
-      '```text',
-      note.raw_text.trim(),
-      '```',
     ].join('\n');
   });
 
@@ -4199,7 +4069,7 @@ function buildThoughtFlowExportMarkdown(flow: ThoughtFlow) {
     `# ${draft.title}`,
     '',
     `내보낸 날짜: ${formatDate(new Date().toISOString())}`,
-    `원본 메모: ${flow.notes.length}개`,
+    `출처 메모: ${flow.notes.length}개`,
     '',
     '## 확장된 메모',
     '',
@@ -4209,7 +4079,7 @@ function buildThoughtFlowExportMarkdown(flow: ThoughtFlow) {
     '',
     ...(draft.judgmentSummary.length ? draft.judgmentSummary.map((item) => `- ${item}`) : [`- ${flow.synthesis}`]),
     '',
-    '## 원본 메모와 전사 요약',
+    '## 출처 메모 요약',
     '',
     ...sourceSections,
     '',
@@ -4225,23 +4095,19 @@ function buildThoughtFlowExportMarkdown(flow: ThoughtFlow) {
 }
 
 function buildNoteExportMarkdown(note: Note, sourceLogs: Note[], relatedNotes: Note[]) {
-  const title = note.ai_title || makeDraftTitle(note.raw_text);
+  const title = note.ai_title || '정리된 생각';
   const logs = sourceLogs.length ? sourceLogs : [note];
   const logSections = logs.map((log, index) => {
-    const logTitle = log.ai_title || makeDraftTitle(log.raw_text);
+    const logTitle = log.ai_title || `출처 ${index + 1}`;
     return [
-      `### ${index === 0 ? '원본' : `이어진 원본 ${index}`} · ${logTitle}`,
+      `### ${index === 0 ? '출처' : `이어진 출처 ${index}`} · ${logTitle}`,
       '',
       `- 날짜: ${formatDate(log.created_at)}`,
-      log.ai_summary ? `- 요약: ${log.ai_summary}` : '',
-      '',
-      '```text',
-      log.raw_text.trim(),
-      '```',
+      log.ai_summary ? `- 요약: ${log.ai_summary}` : '- 요약: 요약을 준비 중이에요.',
     ].filter((line) => line !== '').join('\n');
   });
   const relatedSections = relatedNotes.slice(0, 5).map((related, index) => (
-    `- ${index + 1}. ${related.ai_title || makeDraftTitle(related.raw_text)} · ${formatDate(related.created_at)}`
+    `- ${index + 1}. ${related.ai_title || `연결된 생각 ${index + 1}`} · ${formatDate(related.created_at)}`
   ));
 
   return [
@@ -4252,15 +4118,9 @@ function buildNoteExportMarkdown(note: Note, sourceLogs: Note[], relatedNotes: N
     '',
     '## 요약',
     '',
-    note.ai_summary || makeDraftSummary(note.raw_text),
+    note.ai_summary || '요약을 준비 중이에요.',
     '',
-    '## 전사 원문',
-    '',
-    '```text',
-    note.raw_text.trim(),
-    '```',
-    '',
-    logs.length > 1 ? '## 이어진 원본 로그' : '',
+    logs.length > 1 ? '## 이어진 출처 요약' : '',
     logs.length > 1 ? '' : '',
     ...(logs.length > 1 ? logSections : []),
     relatedSections.length ? '## 다시 이어볼 생각' : '',
@@ -4530,7 +4390,7 @@ function inferIntent(text: string) {
 }
 
 function inferProblem(text: string, intent: string) {
-  if (text.includes('기획력') || text.includes('엘시') || text.includes('갈비스') || text.includes('패배')) return '어떻게 기획을 감각이 아니라 반복 가능한 판단 시스템으로 만들 것인가';
+  if (text.includes('기획력') || text.includes('패배')) return '어떻게 기획을 감각이 아니라 반복 가능한 판단 시스템으로 만들 것인가';
   if (text.includes('회수') || text.includes('잊') || text.includes('다시')) return '어떻게 잊힌 생각을 다시 만나게 할 것인가';
   if (text.includes('mvp') || text.includes('v0.1') || text.includes('핵심') || text.includes('버릴')) return '무엇을 v0.1에 남기고 무엇을 버릴 것인가';
   if (text.includes('랜딩') || text.includes('마케팅') || text.includes('이메일') || text.includes('광고')) return '어떻게 초기 수요를 검증하고 알릴 것인가';
@@ -4541,7 +4401,7 @@ function inferProblem(text: string, intent: string) {
 
 function inferDecisionAxis(text: string, intent: string, reusePurpose: string) {
   if (text.includes('버릴') || text.includes('핵심') || text.includes('v0.1') || text.includes('mvp')) return 'MVP 범위 판단';
-  if (text.includes('기획') || text.includes('문서') || text.includes('기록') || text.includes('엘시') || text.includes('갈비스')) return '기획 성공률 판단';
+  if (text.includes('기획') || text.includes('문서') || text.includes('기록')) return '기획 성공률 판단';
   if (text.includes('웹') || text.includes('아이폰') || text.includes('출시')) return '접근성과 배포 판단';
   if (text.includes('마케팅') || text.includes('랜딩') || text.includes('광고')) return '수요 검증 판단';
   if (text.includes('운동') || text.includes('무릎')) return '건강 루틴 지속 판단';
@@ -4560,7 +4420,7 @@ function inferEmotion(text: string) {
 
 function inferSituation(text: string) {
   if (text.includes('최근') || text.includes('요즘') || text.includes('현재')) return '최근 상태를 점검하는 중';
-  if (text.includes('대화') || text.includes('gpt') || text.includes('갈비스') || text.includes('엘시')) return 'AI와 기획 대화를 하던 중';
+  if (text.includes('대화') || text.includes('gpt')) return 'AI와 기획 대화를 하던 중';
   if (text.includes('출시') || text.includes('웹') || text.includes('랜딩')) return '배포와 접근 방법을 고민하는 중';
   if (text.includes('운동') || text.includes('뛰') || text.includes('무릎')) return '운동 루틴을 실행하며 몸 상태를 관찰하는 중';
   if (text.includes('고양이') || text.includes('와이프')) return '집과 일상에서 떠오른 생각';
