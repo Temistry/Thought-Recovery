@@ -13,8 +13,8 @@
   "dependencies": {
     "@thought-recovery/core": "file:../../packages/core",
     "@vitejs/plugin-react": "latest",
-    "vite": "latest",
-    "electron": "latest"
-  },
-  "devDependencies": {}
+    "electron": "latest",
+    "qrcode": "^1.5.4",
+    "vite": "latest"
+  }
 }

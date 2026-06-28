@@ -1,5 +1,6 @@
 import React, { useMemo, useState } from 'react';
 import { createRoot } from 'react-dom/client';
+import QRCode from 'qrcode';
 import { createSyncTransactionPackage, createVaultManifest, getVaultMarkdownPath } from '@thought-recovery/core';
 import './styles.css';
 
@@ -10,6 +11,7 @@ const sampleVaultNote = {
 
 function App() {
   const [syncSession, setSyncSession] = useState(null);
+  const [syncQrDataUrl, setSyncQrDataUrl] = useState(null);
   const [vaultOverview, setVaultOverview] = useState(null);
   const [lastApplyResult, setLastApplyResult] = useState(null);
   const [statusMessage, setStatusMessage] = useState('Vault를 만들거나 기존 폴더를 선택하면 파일 I/O 상태를 확인합니다.');
@@ -120,12 +122,14 @@ function App() {
     }
     const session = await desktopApi.createSyncSession(vaultOverview.vaultPath);
     setSyncSession(session);
+    setSyncQrDataUrl(await QRCode.toDataURL(session.url, { margin: 1, width: 220 }));
     setStatusMessage('모바일에서 이 URL로 동기화 패키지를 보낼 수 있습니다.');
   }
 
   async function stopLocalSyncSession() {
     if (desktopApi?.stopSyncSession) await desktopApi.stopSyncSession();
     setSyncSession(null);
+    setSyncQrDataUrl(null);
     setStatusMessage('동기화 세션을 닫았습니다.');
   }
 
@@ -192,6 +196,7 @@ function App() {
             </div>
             {syncSession ? (
               <div className="sessionBox">
+                {syncQrDataUrl ? <img className="qrImage" src={syncQrDataUrl} alt="동기화 수신 URL QR" /> : null}
                 <strong>{syncSession.url}</strong>
                 <span>{syncSession.deviceName} · {new Date(syncSession.expiresAt).toLocaleTimeString()} 만료</span>
                 <button className="copyButton" onClick={copySyncUrl}>URL 복사</button>
