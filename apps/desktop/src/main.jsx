@@ -129,6 +129,12 @@ function App() {
     setStatusMessage('동기화 세션을 닫았습니다.');
   }
 
+  async function copySyncUrl() {
+    if (!syncSession?.url) return;
+    await copyText(syncSession.url);
+    setStatusMessage('수신 URL을 클립보드에 복사했습니다. 모바일 설정에 붙여넣어 보내면 됩니다.');
+  }
+
   return (
     <main className="shell">
       <aside className="sidebar">
@@ -188,6 +194,7 @@ function App() {
               <div className="sessionBox">
                 <strong>{syncSession.url}</strong>
                 <span>{syncSession.deviceName} · {new Date(syncSession.expiresAt).toLocaleTimeString()} 만료</span>
+                <button className="copyButton" onClick={copySyncUrl}>URL 복사</button>
               </div>
             ) : null}
           </article>
@@ -221,6 +228,22 @@ function App() {
       </section>
     </main>
   );
+}
+
+async function copyText(text) {
+  if (navigator.clipboard?.writeText) {
+    await navigator.clipboard.writeText(text);
+    return;
+  }
+  const textarea = document.createElement('textarea');
+  textarea.value = text;
+  textarea.setAttribute('readonly', 'true');
+  textarea.style.position = 'fixed';
+  textarea.style.opacity = '0';
+  document.body.appendChild(textarea);
+  textarea.select();
+  document.execCommand('copy');
+  document.body.removeChild(textarea);
 }
 
 createRoot(document.getElementById('root')).render(<App />);

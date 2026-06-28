@@ -2008,6 +2008,15 @@ function AccountScreen({
     }
   }
 
+  async function pasteDesktopSyncUrl() {
+    const pasted = await Clipboard.getStringAsync();
+    if (!pasted.trim()) {
+      Alert.alert('붙여넣을 URL이 없어요', '데스크탑에서 수신 URL을 복사한 뒤 다시 시도해 주세요.');
+      return;
+    }
+    setDesktopSyncUrl(pasted.trim());
+  }
+
   return (
     <View style={styles.accountSheetShell}>
       <Pressable accessibilityRole="button" accessibilityLabel="닫기" style={styles.accountCloseButton} onPress={onBack} hitSlop={10}>
@@ -2072,9 +2081,14 @@ function AccountScreen({
             autoCapitalize="none"
             autoCorrect={false}
           />
-          <Pressable style={[styles.apiSaveButton, sendingDesktopPackage && styles.disabledButton]} onPress={sendDesktopPackage} disabled={sendingDesktopPackage}>
-            <Text style={styles.apiSaveButtonText}>{sendingDesktopPackage ? '보내는 중...' : '데스크탑으로 보내기'}</Text>
-          </Pressable>
+          <View style={styles.accountInlineActions}>
+            <Pressable style={[styles.accountInlineButton, sendingDesktopPackage && styles.disabledButton]} onPress={sendDesktopPackage} disabled={sendingDesktopPackage}>
+              <Text style={styles.accountInlineButtonText}>{sendingDesktopPackage ? '보내는 중...' : '보내기'}</Text>
+            </Pressable>
+            <Pressable style={styles.accountInlineButtonSecondary} onPress={pasteDesktopSyncUrl}>
+              <Text style={styles.accountInlineButtonSecondaryText}>URL 붙여넣기</Text>
+            </Pressable>
+          </View>
           <Pressable style={[styles.apiSaveButtonSecondary, exportingDesktopPackage && styles.disabledButton]} onPress={exportDesktopPackage} disabled={exportingDesktopPackage}>
             <Text style={styles.apiSaveButtonSecondaryText}>{exportingDesktopPackage ? '패키지 준비 중...' : 'JSON만 복사'}</Text>
           </Pressable>
@@ -5320,6 +5334,36 @@ const styles = StyleSheet.create({
     backgroundColor: '#f5ebe4',
   },
   apiSaveButtonSecondaryText: {
+    color: '#4b4038',
+    fontSize: 15,
+    fontWeight: '900',
+  },
+  accountInlineActions: {
+    flexDirection: 'row',
+    gap: 10,
+  },
+  accountInlineButton: {
+    flex: 1,
+    minHeight: 48,
+    borderRadius: 16,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#ff625f',
+  },
+  accountInlineButtonText: {
+    color: '#fffaf6',
+    fontSize: 15,
+    fontWeight: '900',
+  },
+  accountInlineButtonSecondary: {
+    flex: 1,
+    minHeight: 48,
+    borderRadius: 16,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#f5ebe4',
+  },
+  accountInlineButtonSecondaryText: {
     color: '#4b4038',
     fontSize: 15,
     fontWeight: '900',

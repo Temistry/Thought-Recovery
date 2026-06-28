@@ -157,3 +157,14 @@ nav { display: grid; gap: 10px; margin-top: 14px; }
   gap: 4px;
 }
 .sessionBox span { color: #7f766e; font-size: 13px; }
+
+.copyButton {
+  margin-top: 8px;
+  border: 0;
+  border-radius: 12px;
+  padding: 10px 12px;
+  color: #3c332d;
+  background: #f0e4da;
+  font-weight: 900;
+  cursor: pointer;
+}
