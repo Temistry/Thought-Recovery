@@ -1818,7 +1818,7 @@ export default function App() {
   }
 
   function renderTabContent(tab: AppTab = activeTab) {
-    if (tab === 'organized') return renderOrganized();
+    if (tab === 'organized') return renderToday();
     if (tab === 'todos') return renderTodos();
     if (tab === 'archive') return renderArchive();
     return renderToday();
@@ -1887,7 +1887,7 @@ export default function App() {
             onStopVoice={stopOriginalAudio}
             onRetryVoice={retryVoiceTranscription}
             onOpenRelated={openNote}
-            onOpenRelatedThoughtFlow={openThoughtFlow}
+            onOpenRelatedThoughtFlow={() => undefined}
             onRewriteNote={rewriteOriginalNote}
             rewriting={noteRewriteInFlightId === selectedNote.id}
           />
@@ -2345,7 +2345,6 @@ function TodayRecorderCard({
 function BottomTabs({ activeTab, onChange }: { activeTab: AppTab; onChange: (tab: AppTab) => void }) {
   const tabs: Array<{ id: AppTab; label: string; icon: string }> = [
     { id: 'today', label: '오늘', icon: '✦' },
-    { id: 'organized', label: '흐름', icon: '🌱' },
     { id: 'todos', label: '할 일', icon: '✓' },
     { id: 'archive', label: '보관', icon: '▤' }
   ];
@@ -3312,14 +3311,6 @@ function NoteDetail({
         <CopyableText style={styles.detailSummary} copyValue={note.ai_summary || ''}>{note.ai_summary || '요약을 준비 중이에요.'}</CopyableText>
       </View>
 
-      {relatedThoughtFlow ? (
-        <Pressable style={styles.rediscoveryBanner} onPress={() => onOpenRelatedThoughtFlow(relatedThoughtFlow)} accessibilityLabel="연결된 생각 열기">
-          <Text style={styles.rediscoveryBannerKicker}>연결된 생각</Text>
-          <Text style={styles.rediscoveryBannerTitle}>이어볼 만한 생각이 {relatedNotes.length}개 있어요</Text>
-          <Text style={styles.rediscoveryBannerHint}>탭해서 자라난 생각으로 보기</Text>
-        </Pressable>
-      ) : null}
-
       <View style={styles.detailSection}>
         <Text style={styles.detailSectionTitle}>연결된 생각</Text>
         {relatedCandidates.length ? (
@@ -3332,16 +3323,16 @@ function NoteDetail({
               <CopyableText
                 style={styles.relatedTitle}
                 numberOfLines={1}
-                copyValue={candidate.note.ai_title || makeDraftTitle(candidate.note.raw_text)}
+                copyValue={candidate.note.ai_title || '연결된 생각'}
               >
-                {candidate.note.ai_title || makeDraftTitle(candidate.note.raw_text)}
+                {candidate.note.ai_title || '연결된 생각'}
               </CopyableText>
               <CopyableText
                 style={styles.relatedBody}
                 numberOfLines={2}
-                copyValue={candidate.reasons[0] ?? candidate.note.raw_text}
+                copyValue={candidate.reasons[0] ?? candidate.note.ai_summary ?? ''}
               >
-                {candidate.reasons[0] ?? candidate.note.raw_text}
+                {candidate.reasons[0] ?? candidate.note.ai_summary ?? '요약을 준비 중이에요.'}
               </CopyableText>
             </Pressable>
           ))
