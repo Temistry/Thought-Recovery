@@ -97,15 +97,57 @@ nav { display: grid; gap: 10px; margin-top: 14px; }
 }
 
 .syncCard { background: #fff2ec; }
-.primaryButton {
+.buttonRow {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 16px;
+}
+
+.primaryButton,
+.secondaryButton {
   border: 0;
   border-radius: 16px;
   padding: 13px 18px;
-  color: #fffaf6;
-  background: #ff625f;
   font-weight: 900;
   cursor: pointer;
 }
+
+.primaryButton {
+  color: #fffaf6;
+  background: #ff625f;
+}
+
+.secondaryButton {
+  color: #3c332d;
+  background: #f0e4da;
+}
+
+.secondaryButton.wide {
+  width: 100%;
+  margin-top: 10px;
+}
+
+.vaultInfo {
+  display: grid;
+  gap: 8px;
+  padding: 14px;
+  border-radius: 18px;
+  background: #fff2ec;
+}
+
+.vaultInfo span {
+  color: #6f6860;
+  font-size: 13px;
+  word-break: break-all;
+}
+
+.statusText {
+  margin: 12px 0 0;
+  color: #8b8178;
+  font-size: 13px;
+}
+
 .sessionBox {
   margin-top: 16px;
   padding: 14px;

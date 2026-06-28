@@ -1,3 +1,4 @@
+import { createSyncTransaction, validateSyncTransaction } from './syncTransaction';
 import { computeContentHash, parseVaultMarkdown, serializeVaultMarkdown, validateSyncPackageManifest, VaultMarkdownEntity } from './vault';
 
 export function runVaultSmokeTest() {
@@ -32,7 +33,16 @@ export function runVaultSmokeTest() {
   }, { 'notes/note-sample-1.md': markdown });
   assert(errors.length === 0, `manifest validation failed: ${errors.join('; ')}`);
 
-  return { ok: true, hash };
+  const transaction = createSyncTransaction({
+    transactionId: 'tx-1',
+    sourceDeviceId: 'desktop-1',
+    now: '2026-06-27T00:03:00.000Z',
+    files: [{ path: 'notes/note-sample-1.md', content: markdown }],
+  });
+  const transactionResult = validateSyncTransaction(transaction, { 'notes/note-sample-1.md': markdown });
+  assert(transactionResult.ok, `transaction validation failed: ${transactionResult.errors.join('; ')}`);
+
+  return { ok: true, hash, transactionId: transaction.transactionId };
 }
 
 function assert(condition: unknown, message: string): asserts condition {
