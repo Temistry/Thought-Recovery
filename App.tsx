@@ -38,6 +38,7 @@ import type { Session } from '@supabase/supabase-js';
 import { createLocalNote, deleteLocalTrashNote, listCachedThoughtDrafts, listCachedThoughtFlows, listLocalNotes, listLocalTrashNotes, listRecentLocalNotes, moveLocalNoteToTrash, readCachedThoughtFingerprint, readLocalKeyValue, rebuildCachedThoughtFingerprint, replaceCachedThoughtFlows, replaceLocalNotes, restoreLocalTrashNote, saveCachedThoughtDraft, searchLocalNotes, updateLocalNote, writeLocalKeyValue } from './src/lib/localNotes';
 import { buildPromptPatternContext } from './src/lib/thoughtFingerprint';
 import { isSupabaseConfigured, supabase } from './src/lib/supabase';
+import { createVaultExportPackage } from './packages/core/src/vaultExport';
 import { Note, SourceType, ThoughtFingerprintSnapshot } from './src/types';
 
 const AUDIO_BUCKET = 'note-audio';
@@ -374,6 +375,20 @@ export default function App() {
       { text: '설정 열기', onPress: openApiSettings },
     ]);
     return false;
+  }
+
+  async function exportDesktopSyncPackage() {
+    const exportResult = createVaultExportPackage({
+      notes,
+      drafts: generatedDrafts,
+      sourceDeviceId: session?.user?.id ?? 'local-device',
+    });
+    const payload = JSON.stringify(exportResult.syncPackage, null, 2);
+    await Clipboard.setStringAsync(payload);
+    Alert.alert(
+      '데스크탑 동기화 패키지 복사됨',
+      `${exportResult.summary.noteCount}개 메모와 ${exportResult.summary.reportCount}개 리포트를 데스크탑이 가져올 수 있는 JSON으로 복사했어요.`,
+    );
   }
 
   useEffect(() => {
@@ -1817,6 +1832,7 @@ export default function App() {
             cloudEnabled={!!session?.user}
             apiSettings={apiSettings}
             onSaveApiSettings={saveApiSettings}
+            onExportDesktopSyncPackage={exportDesktopSyncPackage}
             onBack={() => setShowAccount(false)}
             onSignOut={session?.user ? signOut : undefined}
           />
@@ -1912,6 +1928,7 @@ function AccountScreen({
   cloudEnabled,
   apiSettings,
   onSaveApiSettings,
+  onExportDesktopSyncPackage,
   onBack,
   onSignOut,
 }: {
@@ -1920,6 +1937,7 @@ function AccountScreen({
   cloudEnabled: boolean;
   apiSettings: UserApiSettings;
   onSaveApiSettings: (settings: UserApiSettings) => Promise<void>;
+  onExportDesktopSyncPackage: () => Promise<void>;
   onBack: () => void;
   onSignOut?: () => void;
 }) {
@@ -1927,6 +1945,7 @@ function AccountScreen({
   const displayName = email ? email.split('@')[0] : '로컬 사용자';
   const [draftSettings, setDraftSettings] = useState<UserApiSettings>(apiSettings);
   const [savingApiSettings, setSavingApiSettings] = useState(false);
+  const [exportingDesktopPackage, setExportingDesktopPackage] = useState(false);
   const activeDraftKey = draftSettings.activeProvider === 'openai' ? draftSettings.openaiKey : draftSettings.anthropicKey;
 
   async function saveDraftApiSettings() {
@@ -1935,6 +1954,15 @@ function AccountScreen({
       await onSaveApiSettings(draftSettings);
     } finally {
       setSavingApiSettings(false);
+    }
+  }
+
+  async function exportDesktopPackage() {
+    setExportingDesktopPackage(true);
+    try {
+      await onExportDesktopSyncPackage();
+    } finally {
+      setExportingDesktopPackage(false);
     }
   }
 
@@ -1993,7 +2021,10 @@ function AccountScreen({
 
         <SettingsSection title="데이터">
           <SettingsRow icon="▱" label="원본 보관" value="보관 탭" hideChevron />
-          <SettingsRow icon="▤" label="내보내기" value="메모 상세" hideChevron />
+          <SettingsRow icon="▤" label="상세 내보내기" value="메모 상세" hideChevron />
+          <Pressable style={[styles.apiSaveButton, exportingDesktopPackage && styles.disabledButton]} onPress={exportDesktopPackage} disabled={exportingDesktopPackage}>
+            <Text style={styles.apiSaveButtonText}>{exportingDesktopPackage ? '패키지 준비 중...' : '데스크탑 동기화 JSON 복사'}</Text>
+          </Pressable>
         </SettingsSection>
 
         <SettingsSection title="앱 정보">

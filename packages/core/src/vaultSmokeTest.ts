@@ -1,5 +1,6 @@
 import { createSyncTransaction, createSyncTransactionApplyPlan, createSyncTransactionPackage, validateSyncTransaction } from './syncTransaction';
 import { computeContentHash, parseVaultMarkdown, serializeVaultMarkdown, validateSyncPackageManifest, VaultMarkdownEntity } from './vault';
+import { createVaultExportPackage } from './vaultExport';
 
 export function runVaultSmokeTest() {
   const entity: VaultMarkdownEntity = {
@@ -51,6 +52,24 @@ export function runVaultSmokeTest() {
   const applyPlan = createSyncTransactionApplyPlan(syncPackage);
   assert(applyPlan.upserts.length === 1, 'apply plan upsert count failed');
   assert(applyPlan.upserts[0]?.content === markdown, 'apply plan content failed');
+
+  const exportPackage = createVaultExportPackage({
+    sourceDeviceId: 'mobile-1',
+    transactionId: 'mobile-export-1',
+    now: '2026-06-27T00:05:00.000Z',
+    notes: [{
+      id: 'note-sample-1',
+      raw_text: 'A body that users can edit.',
+      ai_title: 'Sample note',
+      ai_summary: 'A short summary',
+      ai_tags: ['sample', 'sync'],
+      source_type: 'text',
+      created_at: '2026-06-27T00:00:00.000Z',
+      updated_at: '2026-06-27T00:01:00.000Z',
+    }],
+  });
+  assert(exportPackage.summary.noteCount === 1, 'vault export note count failed');
+  assert(exportPackage.syncPackage.transaction.files.length === 1, 'vault export file count failed');
 
   return { ok: true, hash, transactionId: transaction.transactionId, packageTransactionId: syncPackage.transaction.transactionId };
 }
