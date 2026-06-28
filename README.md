@@ -137,8 +137,8 @@ audioIds:
 ### 1. 저장소 받기
 
 ```bash
-git clone <repository-url>
-cd idea-second-brain
+git clone https://github.com/Temistry/Thought-Recovery.git
+cd Thought-Recovery
 npm install
 ```
 
