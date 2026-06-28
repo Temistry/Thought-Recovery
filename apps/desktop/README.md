@@ -44,7 +44,7 @@ apps/desktop/release/thought-recovery-desktop-win-portable.zip
 4. Desktop shows a 5-minute sync URL and QR.
 5. On iPhone, use one of these MVP paths:
    - Copy the desktop URL and paste it into mobile settings → data → desktop sync URL.
-   - Or scan the desktop QR with the iPhone Camera app, copy/open the URL, then paste it into the app field.
+   - Or scan the desktop QR with the iPhone Camera app. If Safari opens, it shows a Korean instruction page with the same URL. Copy that URL and paste it into the app field.
 6. Tap `보내기` in mobile settings.
 7. Desktop validates hash/size/path and applies newer files to the Vault.
 

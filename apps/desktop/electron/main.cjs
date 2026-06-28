@@ -150,6 +150,10 @@ function handleSyncRequest({ request, response, vaultPath, token, expiresAt }) {
     writeJson(response, 200, { ok: true, expiresAt, deviceName: os.hostname() });
     return;
   }
+  if (request.method === 'GET' && request.url === `/sync/${token}`) {
+    writeSyncInstructionPage(response, { token, expiresAt });
+    return;
+  }
   if (request.method !== 'POST' || request.url !== `/sync/${token}`) {
     writeJson(response, 404, { ok: false, error: 'Unknown sync endpoint' });
     return;
@@ -196,6 +200,41 @@ function writeJson(response, statusCode, payload) {
   setCorsHeaders(response);
   response.writeHead(statusCode, { 'Content-Type': 'application/json; charset=utf-8' });
   response.end(JSON.stringify(payload));
+}
+
+function writeSyncInstructionPage(response, { token, expiresAt }) {
+  if (response.writableEnded) return;
+  setCorsHeaders(response);
+  response.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+  response.end(`<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>생각회수기 데스크탑 동기화</title>
+  <style>
+    body { margin: 0; min-height: 100vh; display: grid; place-items: center; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background: #fffaf6; color: #171412; }
+    main { width: min(560px, calc(100vw - 32px)); padding: 28px; border: 1px solid #eadbd1; border-radius: 28px; background: white; box-shadow: 0 20px 60px rgba(70, 50, 35, 0.12); }
+    h1 { margin: 0 0 12px; font-size: 28px; letter-spacing: -0.8px; }
+    p { color: #6f6860; line-height: 1.65; }
+    code { display: block; padding: 12px; border-radius: 14px; background: #f7efe8; word-break: break-all; color: #3c332d; }
+    .status { color: #ff625f; font-weight: 800; }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>데스크탑 수신 세션이 열려 있어요</h1>
+    <p>이 화면은 QR을 카메라로 열었을 때 보이는 안내입니다. 모바일 앱의 설정 → 데이터 → 데스크탑 수신 URL에 아래 주소를 붙여넣고 <b>보내기</b>를 누르면 됩니다.</p>
+    <code>${escapeHtml(`http://${getPrimaryLanAddress()}:${activeSyncServer?.server.address()?.port ?? ''}/sync/${token}`)}</code>
+    <p class="status">만료: ${escapeHtml(new Date(expiresAt).toLocaleTimeString())}</p>
+    <p>전송이 안 되면 두 기기가 같은 Wi‑Fi인지, Windows 방화벽에서 private network 허용이 되어 있는지 확인하세요.</p>
+  </main>
+</body>
+</html>`);
+}
+
+function escapeHtml(value) {
+  return String(value).replace(/[&<>"]/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[char]));
 }
 
 function getPrimaryLanAddress() {

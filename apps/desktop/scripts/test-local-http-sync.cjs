@@ -3,6 +3,11 @@ const http = require('http');
 const token = `test-${Date.now().toString(36)}`;
 const received = [];
 const server = http.createServer((request, response) => {
+  if (request.method === 'GET' && request.url === `/sync/${token}`) {
+    response.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+    response.end('<html><body>desktop sync session open</body></html>');
+    return;
+  }
   if (request.method !== 'POST' || request.url !== `/sync/${token}`) {
     response.writeHead(404, { 'Content-Type': 'application/json' });
     response.end(JSON.stringify({ ok: false }));
@@ -25,6 +30,11 @@ const server = http.createServer((request, response) => {
 server.listen(0, '127.0.0.1', async () => {
   const address = server.address();
   const url = `http://127.0.0.1:${address.port}/sync/${token}`;
+  const getResponse = await fetch(url);
+  const getText = await getResponse.text();
+  assert(getResponse.ok, 'GET instruction response failed');
+  assert(getText.includes('desktop sync session open'), 'GET instruction body failed');
+
   const response = await fetch(url, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
