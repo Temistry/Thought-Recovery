@@ -1,8 +1,10 @@
 # 생각회수기 / Thought Recovery
 
-> 말해두면 생각이 사라지지 않고, 다시 읽을 수 있는 기획 리포트로 자라나는 오픈소스 AI 메모 앱입니다.
+[English](./README.en.md) | 한국어
 
-생각회수기는 짧은 음성 메모나 텍스트 메모를 남기면 AI가 원문을 보존하고, 제목·요약·태그·관련 생각·자라난 생각 리포트로 정리해 주는 로컬-first 세컨드브레인 앱입니다.
+> 말해둔 생각을 AI가 정리하고, 로컬 Vault에 보관해 다시 꺼내보는 오픈소스 세컨드브레인 앱입니다.
+
+생각회수기는 짧은 음성 메모나 텍스트 메모를 남기면 AI가 원문을 보존하고, 제목·요약·태그·관련 생각·자라난 생각 리포트로 정리해 주는 로컬-first 메모 앱입니다.
 
 단순히 “메모를 많이 저장하는 앱”이 아니라, 사용자가 잊어버린 말과 생각을 다시 회수해서 기획·판단·실행으로 이어가게 만드는 것을 목표로 합니다.
 
@@ -11,8 +13,9 @@
 이 프로젝트는 **오픈소스 프로젝트**입니다.
 
 - 라이선스: [MIT License](./LICENSE)
+- 저장소: https://github.com/Temistry/Thought-Recovery
 - 누구나 코드를 읽고, 수정하고, 포크하고, 개인/상업 프로젝트에 참고할 수 있습니다.
-- 단, 사용자가 직접 입력한 API key, Supabase 설정값, 개인 메모 데이터는 각자의 책임으로 안전하게 관리해야 합니다.
+- 단, API key, Supabase 설정값, 개인 메모 데이터는 각자의 책임으로 안전하게 관리해야 합니다.
 - 이 저장소에는 실제 API key나 개인 데이터가 포함되어서는 안 됩니다.
 
 ## 이 앱은 무엇을 하나요?
@@ -84,7 +87,7 @@
 
 ### 로컬 동기화
 
-모바일과 데스크탑은 중앙 서버 없이 같은 Wi‑Fi 안에서 데이터를 주고받을 수 있습니다.
+모바일과 데스크탑은 중앙 서버 없이 같은 Wi-Fi 안에서 데이터를 주고받을 수 있습니다.
 
 기본 흐름은 다음과 같습니다.
 
@@ -192,7 +195,7 @@ apps/desktop/release/thought-recovery-desktop-win-portable.zip
 
 주의:
 
-- iPhone과 Windows PC가 같은 Wi‑Fi에 있어야 합니다.
+- iPhone과 Windows PC가 같은 Wi-Fi에 있어야 합니다.
 - Windows Defender Firewall이 뜨면 private network 접근을 허용해야 합니다.
 - 수신 URL은 5분 후 만료됩니다.
 - 전송 실패 시 데스크탑에서 세션을 다시 열고 재시도하세요.
@@ -293,7 +296,7 @@ npx expo export --platform ios --output-dir .expo-ios-test
 
 운영 확인이 필요한 축:
 
-- 실제 iPhone + Windows 같은 Wi‑Fi 전송 QA
+- 실제 iPhone + Windows 같은 Wi-Fi 전송 QA
 - Windows Defender Firewall 허용 흐름
 - 다량 메모 전송 시 12MB 제한 적정성
 - 장기적으로 in-app QR scanner 도입 여부
