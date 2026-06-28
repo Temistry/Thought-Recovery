@@ -1,6 +1,6 @@
 import React, { useMemo, useState } from 'react';
 import { createRoot } from 'react-dom/client';
-import { createSyncTransaction, createVaultManifest, getVaultMarkdownPath } from '@thought-recovery/core';
+import { createSyncTransactionPackage, createVaultManifest, getVaultMarkdownPath } from '@thought-recovery/core';
 import './styles.css';
 
 const sampleVaultNote = {
@@ -11,12 +11,13 @@ const sampleVaultNote = {
 function App() {
   const [syncSession, setSyncSession] = useState(null);
   const [vaultOverview, setVaultOverview] = useState(null);
+  const [lastApplyResult, setLastApplyResult] = useState(null);
   const [statusMessage, setStatusMessage] = useState('Vault를 만들거나 기존 폴더를 선택하면 파일 I/O 상태를 확인합니다.');
   const previewManifest = useMemo(() => createVaultManifest('local-desktop-vault', new Date().toISOString()), []);
   const samplePath = getVaultMarkdownPath(sampleVaultNote);
-  const previewTransaction = useMemo(() => createSyncTransaction({
+  const previewPackage = useMemo(() => createSyncTransactionPackage({
     transactionId: 'preview-transaction',
-    sourceDeviceId: 'desktop-preview',
+    sourceDeviceId: 'mobile-preview',
     now: previewManifest.createdAt,
     files: [{ path: samplePath, content: 'preview' }],
   }), [previewManifest.createdAt, samplePath]);
@@ -51,7 +52,61 @@ function App() {
     if (!desktopApi || !vaultOverview?.vaultPath) return;
     const overview = await desktopApi.writeSampleNote(vaultOverview.vaultPath);
     setVaultOverview(overview);
+    setLastApplyResult({ transactionId: 'desktop-sample', applied: { upserts: [overview.lastWrittenPath], deletes: [] } });
     setStatusMessage(`${overview.lastWrittenPath} 파일을 썼습니다.`);
+  }
+
+  async function applyPreviewMobileTransaction() {
+    if (!desktopApi || !vaultOverview?.vaultPath) {
+      setStatusMessage('먼저 Vault를 만들거나 선택해야 합니다.');
+      return;
+    }
+    const now = new Date().toISOString();
+    const noteId = `mobile-preview-${Date.now().toString(36)}`;
+    const notePath = `notes/${noteId}.md`;
+    const markdown = [
+      '---',
+      `id: ${noteId}`,
+      'type: note',
+      `createdAt: ${now}`,
+      `updatedAt: ${now}`,
+      'deletedAt: null',
+      'title: "모바일에서 넘어온 미리보기 메모"',
+      'summary: "sync transaction 적용 확인용"',
+      'tags:',
+      '  - mobile',
+      '  - sync',
+      'audioIds:',
+      '---',
+      '',
+      '이 파일은 모바일 export가 보낼 transaction package와 같은 형태로 데스크탑 Vault에 적용된 미리보기 메모입니다.',
+      '',
+    ].join('\n');
+    const syncPackage = createSyncTransactionPackage({
+      transactionId: `mobile-preview-${Date.now().toString(36)}`,
+      sourceDeviceId: 'mobile-preview',
+      now,
+      files: [{ path: notePath, content: markdown }],
+    });
+    const result = await desktopApi.applySyncTransactionPackage(vaultOverview.vaultPath, syncPackage);
+    setVaultOverview(result.overview);
+    setLastApplyResult(result);
+    setStatusMessage(`${result.applied.upserts.length}개 파일을 transaction으로 적용했습니다.`);
+  }
+
+  async function importSyncTransactionPackage() {
+    if (!desktopApi || !vaultOverview?.vaultPath) {
+      setStatusMessage('먼저 Vault를 만들거나 선택해야 합니다.');
+      return;
+    }
+    const result = await desktopApi.importSyncTransactionPackage(vaultOverview.vaultPath);
+    if (!result) {
+      setStatusMessage('transaction JSON 가져오기를 취소했습니다.');
+      return;
+    }
+    setVaultOverview(result.overview);
+    setLastApplyResult(result);
+    setStatusMessage(`${result.transactionId} transaction을 적용했습니다.`);
   }
 
   async function startLocalSyncSession() {
@@ -82,7 +137,7 @@ function App() {
         <header className="hero">
           <p className="eyebrow">Windows portable first</p>
           <h2>모바일에서 회수한 생각을 PC에서 안전하게 다시 엽니다</h2>
-          <p>Markdown, audio, attachment 중심 Vault를 만들고, 로컬 파일 I/O와 검증 가능한 sync transaction을 먼저 단단하게 붙이는 단계입니다.</p>
+          <p>Vault 파일 I/O 다음 단계로, 모바일이 보낼 변경 묶음을 데스크탑이 검증하고 적용하는 최소 경로를 붙였습니다.</p>
         </header>
 
         <div className="grid">
@@ -110,9 +165,25 @@ function App() {
           </article>
 
           <article className="card syncCard">
+            <p className="cardKicker">Transaction apply</p>
+            <h3>모바일 변경 묶음 적용</h3>
+            <p>QR/HTTP를 얹기 전에, 같은 transaction package를 데스크탑이 검증하고 Vault에 쓰는 경로를 먼저 고정합니다.</p>
+            <div className="buttonRow">
+              <button className="primaryButton" onClick={applyPreviewMobileTransaction}>미리보기 transaction 적용</button>
+              <button className="secondaryButton" onClick={importSyncTransactionPackage}>JSON 가져오기</button>
+            </div>
+            {lastApplyResult ? (
+              <div className="sessionBox">
+                <strong>{lastApplyResult.transactionId}</strong>
+                <span>{lastApplyResult.applied.upserts.length} upsert · {lastApplyResult.applied.deletes.length} delete</span>
+              </div>
+            ) : null}
+          </article>
+
+          <article className="card">
             <p className="cardKicker">Local sync</p>
             <h3>5분짜리 로컬 연결 세션</h3>
-            <p>중앙 서버 없이 같은 네트워크 안에서 모바일이 데스크탑 세션에 접속하는 구조의 첫 뼈대입니다.</p>
+            <p>중앙 서버 없이 같은 네트워크 안에서 모바일이 데스크탑 세션에 접속하는 구조입니다. 다음 루프에서 실제 전송 경로를 붙입니다.</p>
             <button className="primaryButton" onClick={startLocalSyncSession}>동기화 세션 열기</button>
             {syncSession ? (
               <div className="sessionBox">
@@ -126,16 +197,10 @@ function App() {
             <p className="cardKicker">Transaction preview</p>
             <h3>검증 가능한 변경 묶음</h3>
             <ul>
-              <li>transaction → {previewTransaction.transactionId}</li>
-              <li>files → {previewTransaction.files.length}</li>
+              <li>transaction → {previewPackage.transaction.transactionId}</li>
+              <li>files → {previewPackage.transaction.files.length}</li>
               <li>hash/bytes 검증 포함</li>
             </ul>
-          </article>
-
-          <article className="card">
-            <p className="cardKicker">AI settings</p>
-            <h3>API key는 기기별 보관</h3>
-            <p>OpenAI/Anthropic 중 하나를 선택하되 key는 동기화하지 않습니다. AI 결과물만 데이터로 취급해 Vault와 동기화합니다.</p>
           </article>
         </div>
       </section>

@@ -17,8 +17,9 @@ Implemented in this loop:
 - `manifest.json` creation for a new Vault
 - Vault overview counts for notes, reports, and audio files
 - Sample Markdown note write for file I/O verification
+- Sync transaction package apply/import path
 - 5-minute local sync session placeholder
-- Core sync transaction validation in `packages/core`
+- Core sync transaction validation/apply planning in `packages/core`
 
 ## Run
 
@@ -36,5 +37,5 @@ apps/desktop/release/thought-recovery-desktop-win-portable.zip
 ## Next
 
 - Replace placeholder sync sessions with QR/local transaction exchange.
-- Add desktop file read/write adapter for real mobile sync packages.
+- Add mobile export/import adapter that produces the desktop-supported transaction package shape.
 - Add user-owned AI API adapter after sync storage is stable.

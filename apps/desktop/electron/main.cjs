@@ -57,30 +57,35 @@ app.whenReady().then(() => {
 
   ipcMain.handle('desktop:write-sample-note', async (_event, vaultPath) => {
     if (!vaultPath) throw new Error('Vault path is required');
-    const overview = ensureVault(vaultPath);
     const now = new Date().toISOString();
     const noteId = `desktop-sample-${Date.now().toString(36)}`;
-    const notePath = path.join(vaultPath, 'notes', `${noteId}.md`);
-    const markdown = [
-      '---',
-      `id: ${noteId}`,
-      'type: note',
-      `createdAt: ${now}`,
-      `updatedAt: ${now}`,
-      'deletedAt: null',
-      'title: "데스크탑에서 만든 샘플 메모"',
-      'summary: "Vault 파일 I/O 확인용 메모"',
-      'tags:',
-      '  - desktop',
-      '  - vault',
-      'audioIds:',
-      '---',
-      '',
-      '이 메모는 데스크탑 앱이 Vault 폴더에 직접 Markdown 파일을 쓸 수 있는지 확인하기 위한 샘플입니다.',
-      '',
-    ].join('\n');
-    fs.writeFileSync(notePath, markdown, 'utf8');
-    return { ...ensureVault(vaultPath), lastWrittenPath: path.relative(vaultPath, notePath).replace(/\\/g, '/') };
+    const markdown = createSampleMarkdown(noteId, now, '데스크탑에서 만든 샘플 메모', 'Vault 파일 I/O 확인용 메모');
+    const result = applySyncTransactionPackage(vaultPath, createSingleFilePackage({
+      transactionId: `desktop-sample-${Date.now().toString(36)}`,
+      sourceDeviceId: os.hostname(),
+      relativePath: `notes/${noteId}.md`,
+      content: markdown,
+      now,
+    }));
+    return { ...result.overview, lastWrittenPath: result.applied.upserts[0] ?? null };
+  });
+
+  ipcMain.handle('desktop:apply-sync-transaction-package', async (_event, vaultPath, syncPackage) => {
+    if (!vaultPath) throw new Error('Vault path is required');
+    const result = applySyncTransactionPackage(vaultPath, syncPackage);
+    return result;
+  });
+
+  ipcMain.handle('desktop:import-sync-transaction-package', async (_event, vaultPath) => {
+    if (!vaultPath) throw new Error('Vault path is required');
+    const result = await dialog.showOpenDialog({
+      title: 'Sync transaction JSON 선택',
+      filters: [{ name: 'Sync transaction JSON', extensions: ['json'] }],
+      properties: ['openFile'],
+    });
+    if (result.canceled || !result.filePaths[0]) return null;
+    const syncPackage = JSON.parse(fs.readFileSync(result.filePaths[0], 'utf8'));
+    return applySyncTransactionPackage(vaultPath, syncPackage);
   });
 
   createWindow();
@@ -125,6 +130,120 @@ function ensureVault(vaultPath) {
       audio: countFiles(path.join(vaultPath, 'attachments', 'audio')),
     },
   };
+}
+
+function applySyncTransactionPackage(vaultPath, syncPackage) {
+  ensureVault(vaultPath);
+  validateSyncPackageShape(syncPackage);
+
+  const applied = { upserts: [], deletes: [] };
+  for (const file of syncPackage.transaction.files) {
+    const relativePath = normalizeVaultRelativePath(file.path);
+    const targetPath = resolveVaultPath(vaultPath, relativePath);
+    if (file.operation === 'delete') {
+      if (fs.existsSync(targetPath)) fs.unlinkSync(targetPath);
+      applied.deletes.push(relativePath);
+      continue;
+    }
+
+    const content = syncPackage.files[relativePath] ?? syncPackage.files[file.path];
+    if (typeof content !== 'string') throw new Error(`Missing file content: ${relativePath}`);
+    const hash = computeContentHash(content);
+    const bytes = Buffer.byteLength(content, 'utf8');
+    if (hash !== file.hash) throw new Error(`Hash mismatch: ${relativePath}`);
+    if (bytes !== file.bytes) throw new Error(`Size mismatch: ${relativePath}`);
+
+    fs.mkdirSync(path.dirname(targetPath), { recursive: true });
+    fs.writeFileSync(targetPath, content, 'utf8');
+    applied.upserts.push(relativePath);
+  }
+
+  touchManifest(vaultPath);
+  return {
+    transactionId: syncPackage.transaction.transactionId,
+    applied,
+    overview: ensureVault(vaultPath),
+  };
+}
+
+function validateSyncPackageShape(syncPackage) {
+  if (!syncPackage || typeof syncPackage !== 'object') throw new Error('Invalid sync package');
+  if (!syncPackage.transaction || typeof syncPackage.transaction !== 'object') throw new Error('Missing transaction');
+  if (syncPackage.transaction.schemaVersion !== 1) throw new Error('Unsupported sync transaction schema version');
+  if (!Array.isArray(syncPackage.transaction.files)) throw new Error('Missing transaction files');
+  if (!syncPackage.files || typeof syncPackage.files !== 'object') throw new Error('Missing package file contents');
+}
+
+function createSingleFilePackage({ transactionId, sourceDeviceId, relativePath, content, now }) {
+  const normalizedPath = normalizeVaultRelativePath(relativePath);
+  return {
+    transaction: {
+      schemaVersion: 1,
+      transactionId,
+      sourceDeviceId,
+      createdAt: now,
+      files: [{
+        path: normalizedPath,
+        operation: 'upsert',
+        hash: computeContentHash(content),
+        bytes: Buffer.byteLength(content, 'utf8'),
+        updatedAt: now,
+      }],
+    },
+    files: { [normalizedPath]: content },
+  };
+}
+
+function createSampleMarkdown(noteId, now, title, summary) {
+  return [
+    '---',
+    `id: ${noteId}`,
+    'type: note',
+    `createdAt: ${now}`,
+    `updatedAt: ${now}`,
+    'deletedAt: null',
+    `title: ${JSON.stringify(title)}`,
+    `summary: ${JSON.stringify(summary)}`,
+    'tags:',
+    '  - desktop',
+    '  - vault',
+    'audioIds:',
+    '---',
+    '',
+    '이 메모는 데스크탑 앱이 Vault 폴더에 sync transaction을 적용할 수 있는지 확인하기 위한 샘플입니다.',
+    '',
+  ].join('\n');
+}
+
+function touchManifest(vaultPath) {
+  const manifestPath = path.join(vaultPath, MANIFEST_FILE);
+  const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+  manifest.updatedAt = new Date().toISOString();
+  fs.writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, 'utf8');
+}
+
+function normalizeVaultRelativePath(value) {
+  const normalized = String(value ?? '').replace(/\\/g, '/').replace(/^\/+/, '');
+  const parts = normalized.split('/').filter(Boolean);
+  if (!parts.length || parts.some((part) => part === '.' || part === '..')) throw new Error(`Unsafe vault path: ${value}`);
+  return parts.join('/');
+}
+
+function resolveVaultPath(vaultPath, relativePath) {
+  const targetPath = path.resolve(vaultPath, normalizeVaultRelativePath(relativePath));
+  const rootPath = path.resolve(vaultPath);
+  if (!targetPath.startsWith(rootPath + path.sep)) throw new Error(`Unsafe vault path: ${relativePath}`);
+  return targetPath;
+}
+
+function computeContentHash(content) {
+  const bytes = Buffer.isBuffer(content) ? content : Buffer.from(String(content), 'utf8');
+  let hash = 2166136261;
+  for (const byte of bytes) {
+    hash ^= byte;
+    hash = Math.imul(hash, 16777619);
+  }
+  return (hash >>> 0).toString(16).padStart(8, '0');
 }
 
 function countMarkdownFiles(dir) {

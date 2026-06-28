@@ -18,6 +18,16 @@ export type SyncTransaction = {
   files: SyncTransactionFile[];
 };
 
+export type SyncTransactionPackage = {
+  transaction: SyncTransaction;
+  files: Record<string, string>;
+};
+
+export type SyncTransactionApplyPlan = {
+  upserts: Array<{ path: string; content: string }>;
+  deletes: string[];
+};
+
 export type SyncTransactionValidationResult = {
   ok: boolean;
   errors: string[];
@@ -42,6 +52,19 @@ export function createSyncTransaction(params: {
       bytes: getByteLength(file.content),
       updatedAt: file.updatedAt ?? createdAt,
     })),
+  };
+}
+
+export function createSyncTransactionPackage(params: {
+  transactionId: string;
+  sourceDeviceId: string;
+  files: Array<{ path: string; content: string; updatedAt?: string }>;
+  now?: string;
+}): SyncTransactionPackage {
+  const transaction = createSyncTransaction(params);
+  return {
+    transaction,
+    files: Object.fromEntries(params.files.map((file) => [normalizeVaultRelativePath(file.path), file.content])),
   };
 }
 
@@ -83,6 +106,23 @@ export function validateSyncTransaction(
   }
 
   return { ok: errors.length === 0, errors };
+}
+
+export function createSyncTransactionApplyPlan(syncPackage: SyncTransactionPackage): SyncTransactionApplyPlan {
+  const validation = validateSyncTransaction(syncPackage.transaction, syncPackage.files);
+  if (!validation.ok) throw new Error(validation.errors.join('; '));
+
+  const upserts: SyncTransactionApplyPlan['upserts'] = [];
+  const deletes: string[] = [];
+  for (const file of syncPackage.transaction.files) {
+    const normalizedPath = normalizeVaultRelativePath(file.path);
+    if (file.operation === 'delete') {
+      deletes.push(normalizedPath);
+    } else {
+      upserts.push({ path: normalizedPath, content: syncPackage.files[normalizedPath] ?? syncPackage.files[file.path] ?? '' });
+    }
+  }
+  return { upserts, deletes };
 }
 
 export function normalizeVaultRelativePath(path: string): string {

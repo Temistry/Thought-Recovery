@@ -1,4 +1,4 @@
-import { createSyncTransaction, validateSyncTransaction } from './syncTransaction';
+import { createSyncTransaction, createSyncTransactionApplyPlan, createSyncTransactionPackage, validateSyncTransaction } from './syncTransaction';
 import { computeContentHash, parseVaultMarkdown, serializeVaultMarkdown, validateSyncPackageManifest, VaultMarkdownEntity } from './vault';
 
 export function runVaultSmokeTest() {
@@ -42,7 +42,17 @@ export function runVaultSmokeTest() {
   const transactionResult = validateSyncTransaction(transaction, { 'notes/note-sample-1.md': markdown });
   assert(transactionResult.ok, `transaction validation failed: ${transactionResult.errors.join('; ')}`);
 
-  return { ok: true, hash, transactionId: transaction.transactionId };
+  const syncPackage = createSyncTransactionPackage({
+    transactionId: 'tx-package-1',
+    sourceDeviceId: 'mobile-1',
+    now: '2026-06-27T00:04:00.000Z',
+    files: [{ path: 'notes/note-sample-1.md', content: markdown }],
+  });
+  const applyPlan = createSyncTransactionApplyPlan(syncPackage);
+  assert(applyPlan.upserts.length === 1, 'apply plan upsert count failed');
+  assert(applyPlan.upserts[0]?.content === markdown, 'apply plan content failed');
+
+  return { ok: true, hash, transactionId: transaction.transactionId, packageTransactionId: syncPackage.transaction.transactionId };
 }
 
 function assert(condition: unknown, message: string): asserts condition {
