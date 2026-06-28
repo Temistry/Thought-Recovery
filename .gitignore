@@ -51,4 +51,5 @@ yarn-error.*
 # Desktop build artifacts
 apps/desktop/dist/
 apps/desktop/release/
+/release/
 

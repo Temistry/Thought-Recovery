@@ -3,8 +3,9 @@ const fs = require('fs');
 const path = require('path');
 
 const root = path.resolve(__dirname, '..');
+const repoRoot = path.resolve(root, '..', '..');
 const dist = path.join(root, 'dist');
-const release = path.join(root, 'release');
+const release = path.join(repoRoot, 'release', 'desktop');
 const staging = path.join(release, 'thought-recovery-desktop-win-portable');
 const zipPath = path.join(release, 'thought-recovery-desktop-win-portable.zip');
 

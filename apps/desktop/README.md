@@ -33,7 +33,7 @@ npm run dist:zip --workspace @idea-second-brain/desktop
 Portable preview output:
 
 ```text
-apps/desktop/release/thought-recovery-desktop-win-portable.zip
+release/desktop/thought-recovery-desktop-win-portable.zip
 ```
 
 ## Local mobile → desktop sync flow

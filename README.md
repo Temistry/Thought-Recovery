@@ -179,7 +179,7 @@ npm run dist:zip --workspace @idea-second-brain/desktop
 산출물 위치:
 
 ```text
-apps/desktop/release/thought-recovery-desktop-win-portable.zip
+release/desktop/thought-recovery-desktop-win-portable.zip
 ```
 
 ### 4. 모바일 → 데스크탑 동기화 사용법

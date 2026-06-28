@@ -180,7 +180,7 @@ npm run dist:zip --workspace @idea-second-brain/desktop
 Output path:
 
 ```text
-apps/desktop/release/thought-recovery-desktop-win-portable.zip
+release/desktop/thought-recovery-desktop-win-portable.zip
 ```
 
 ### 4. Sync mobile to desktop
