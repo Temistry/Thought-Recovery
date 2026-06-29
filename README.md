@@ -169,6 +169,19 @@ D:\data\Thought-Recovery\release\desktop\Thought-Recovery-Desktop-0.1.0-x64.exe
 
 주의: `npm run desktop:build`는 EXE를 만드는 명령이 아닙니다. 데스크탑 화면 파일만 만드는 개발용 빌드입니다. 일반 사용자는 `npm run desktop:exe`를 쓰면 됩니다.
 
+빌드 중 `EPERM: operation not permitted, rename ... win-unpacked.tmp -> win-unpacked` 에러가 뜨면 기존 실행 파일이나 빌드 폴더가 Windows에 잠긴 상태입니다.
+
+1. 실행 중인 `Thought Recovery` 앱을 끕니다.
+2. `release/desktop` 폴더를 열어둔 탐색기 창을 닫습니다.
+3. 아래 명령으로 기존 빌드 폴더를 정리한 뒤 다시 EXE를 만듭니다.
+
+```bash
+npm run desktop:clean
+npm run desktop:exe
+```
+
+그래도 안 되면 PowerShell을 관리자 권한으로 열고 같은 명령을 다시 실행하세요.
+
 ### 3. 모바일 앱 실행하기
 
 모바일 앱을 확인하려면 다음을 실행하세요.
@@ -256,6 +269,9 @@ npm run web
 
 # 데스크탑 개발용 빌드, EXE 생성 아님
 npm run desktop:build
+
+# 데스크탑 빌드 폴더 정리
+npm run desktop:clean
 
 # 데스크탑 Windows EXE 생성
 npm run desktop:exe

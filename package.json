@@ -34,7 +34,8 @@
     "typecheck": "tsc --noEmit",
     "desktop:dev": "npm run dev --workspace @idea-second-brain/desktop",
     "desktop:build": "npm run build --workspace @idea-second-brain/desktop",
-    "desktop:exe": "npm run dist:exe --workspace @idea-second-brain/desktop"
+    "desktop:exe": "npm run dist:exe --workspace @idea-second-brain/desktop",
+    "desktop:clean": "node scripts/clean-desktop-release.cjs"
   },
   "private": true,
   "workspaces": [

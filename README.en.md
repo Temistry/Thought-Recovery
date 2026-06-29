@@ -170,6 +170,19 @@ D:\data\Thought-Recovery\release\desktop\Thought-Recovery-Desktop-0.1.0-x64.exe
 
 Note: `npm run desktop:build` does not create an EXE. It only builds the desktop renderer files for development. Most users should run `npm run desktop:exe`.
 
+If the build fails with `EPERM: operation not permitted, rename ... win-unpacked.tmp -> win-unpacked`, Windows is locking the previous app folder.
+
+1. Close the running `Thought Recovery` app.
+2. Close any Explorer window opened inside `release/desktop`.
+3. Clean the previous build folder, then create the EXE again.
+
+```bash
+npm run desktop:clean
+npm run desktop:exe
+```
+
+If it still fails, open PowerShell as Administrator and run the same commands again.
+
 ### 3. Run the mobile app
 
 To preview the mobile app, run:
@@ -257,6 +270,9 @@ npm run web
 
 # Build desktop renderer files, not an EXE
 npm run desktop:build
+
+# Clean desktop build folders
+npm run desktop:clean
 
 # Create desktop Windows EXE
 npm run desktop:exe
