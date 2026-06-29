@@ -61,7 +61,10 @@ nav { display: grid; gap: 10px; margin-top: 14px; }
   background: rgba(255,255,255,0.08);
   text-align: left;
   font-weight: 800;
+  cursor: pointer;
 }
+.navButton:hover,
+.navButton:focus-visible { background: rgba(255,255,255,0.16); }
 .navButton.active { color: #171412; background: #fffaf6; }
 
 .content { padding: 46px; overflow: auto; }
