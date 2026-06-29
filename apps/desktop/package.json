@@ -9,7 +9,8 @@
     "electron": "electron .",
     "build": "vite build",
     "dist:zip": "npm run build && node scripts/package-portable-zip.cjs",
-    "dist:exe": "npm run build && electron-builder --win portable --x64"
+    "dist:exe": "npm run build && electron-builder --win portable --x64",
+    "test:ui": "electron scripts/test-renderer-ui.cjs"
   },
   "dependencies": {
     "@thought-recovery/core": "file:../../packages/core",
