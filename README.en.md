@@ -138,7 +138,9 @@ The original note text is stored here.
 
 ## How to use
 
-### 1. Clone the repository
+If you are setting up the project for the first time, you only need these steps.
+
+### 1. Clone the project
 
 ```bash
 git clone https://github.com/Temistry/Thought-Recovery.git
@@ -146,44 +148,45 @@ cd Thought-Recovery
 npm install
 ```
 
-### 2. Run the mobile app
+### 2. Create the Windows EXE
+
+If you need the desktop executable, run this one command.
 
 ```bash
-npm start
+npm run desktop:exe
 ```
 
-Then open it with one of these options:
-
-- iPhone/Android: scan the Expo QR with Expo Go
-- iOS simulator: `npm run ios`
-- Android emulator: `npm run android`
-- Web preview: `npm run web`
-
-For tunnel mode during development:
-
-```bash
-npx expo start --tunnel --clear
-```
-
-### 3. Build the desktop app
-
-```bash
-npm run build --workspace @idea-second-brain/desktop
-```
-
-Create a Windows EXE:
-
-```bash
-npm run dist:exe --workspace @idea-second-brain/desktop
-```
-
-Output path:
+After the build finishes, the EXE appears here.
 
 ```text
 release/desktop/Thought-Recovery-Desktop-0.1.0-x64.exe
 ```
 
-### 4. Sync mobile to desktop
+For example, if the project is located at `D:\data\Thought-Recovery`, the final file will be here.
+
+```text
+D:\data\Thought-Recovery\release\desktop\Thought-Recovery-Desktop-0.1.0-x64.exe
+```
+
+Note: `npm run desktop:build` does not create an EXE. It only builds the desktop renderer files for development. Most users should run `npm run desktop:exe`.
+
+### 3. Run the mobile app
+
+To preview the mobile app, run:
+
+```bash
+npm start
+```
+
+When Expo starts, scan the QR with Expo Go on iPhone or Android.
+
+For tunnel mode during development, run:
+
+```bash
+npx expo start --tunnel --clear
+```
+
+### Sync mobile to desktop
 
 1. Open the desktop app.
 2. Click `Create default Vault` or `Select folder`.
@@ -252,11 +255,11 @@ npm start
 # Run Web preview
 npm run web
 
-# Build desktop app
-npm run build --workspace @idea-second-brain/desktop
+# Build desktop renderer files, not an EXE
+npm run desktop:build
 
 # Create desktop Windows EXE
-npm run dist:exe --workspace @idea-second-brain/desktop
+npm run desktop:exe
 
 # Test desktop sync conflict policy
 node apps/desktop/scripts/test-sync-conflict.cjs

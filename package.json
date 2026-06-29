@@ -31,7 +31,10 @@
     "ios": "expo start --ios",
     "web": "expo start --web",
     "postinstall": "node scripts/fix-metro-watch.js",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "desktop:dev": "npm run dev --workspace @idea-second-brain/desktop",
+    "desktop:build": "npm run build --workspace @idea-second-brain/desktop",
+    "desktop:exe": "npm run dist:exe --workspace @idea-second-brain/desktop"
   },
   "private": true,
   "workspaces": [

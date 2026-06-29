@@ -137,7 +137,9 @@ audioIds:
 
 ## 어떻게 사용하나요?
 
-### 1. 저장소 받기
+처음 받는 사람 기준으로는 아래 3가지만 보면 됩니다.
+
+### 1. 프로젝트 받기
 
 ```bash
 git clone https://github.com/Temistry/Thought-Recovery.git
@@ -145,44 +147,45 @@ cd Thought-Recovery
 npm install
 ```
 
-### 2. 모바일 앱 실행
+### 2. Windows 실행 파일 만들기
+
+EXE가 필요하면 이 명령어 하나만 실행하세요.
 
 ```bash
-npm start
+npm run desktop:exe
 ```
 
-Expo가 실행되면 다음 중 하나로 확인합니다.
-
-- iPhone/Android: Expo Go로 QR 스캔
-- iOS simulator: `npm run ios`
-- Android emulator: `npm run android`
-- Web preview: `npm run web`
-
-개발 중 기본 터널 실행이 필요하면 다음처럼 실행할 수 있습니다.
-
-```bash
-npx expo start --tunnel --clear
-```
-
-### 3. 데스크탑 앱 빌드
-
-```bash
-npm run build --workspace @idea-second-brain/desktop
-```
-
-Windows EXE 생성:
-
-```bash
-npm run dist:exe --workspace @idea-second-brain/desktop
-```
-
-산출물 위치:
+빌드가 끝나면 실행 파일은 여기에 생깁니다.
 
 ```text
 release/desktop/Thought-Recovery-Desktop-0.1.0-x64.exe
 ```
 
-### 4. 모바일 → 데스크탑 동기화 사용법
+예를 들어 프로젝트를 `D:\data\Thought-Recovery`에 받았다면 최종 위치는 다음과 같습니다.
+
+```text
+D:\data\Thought-Recovery\release\desktop\Thought-Recovery-Desktop-0.1.0-x64.exe
+```
+
+주의: `npm run desktop:build`는 EXE를 만드는 명령이 아닙니다. 데스크탑 화면 파일만 만드는 개발용 빌드입니다. 일반 사용자는 `npm run desktop:exe`를 쓰면 됩니다.
+
+### 3. 모바일 앱 실행하기
+
+모바일 앱을 확인하려면 다음을 실행하세요.
+
+```bash
+npm start
+```
+
+Expo가 켜지면 iPhone/Android에서 Expo Go로 QR을 스캔하면 됩니다.
+
+개발 중 터널 모드가 필요하면 다음 명령을 사용하세요.
+
+```bash
+npx expo start --tunnel --clear
+```
+
+### 모바일 → 데스크탑 동기화 사용법
 
 1. 데스크탑 앱을 엽니다.
 2. `기본 Vault 만들기` 또는 `폴더 선택`을 누릅니다.
@@ -251,11 +254,11 @@ npm start
 # Web 실행
 npm run web
 
-# 데스크탑 빌드
-npm run build --workspace @idea-second-brain/desktop
+# 데스크탑 개발용 빌드, EXE 생성 아님
+npm run desktop:build
 
 # 데스크탑 Windows EXE 생성
-npm run dist:exe --workspace @idea-second-brain/desktop
+npm run desktop:exe
 
 # 데스크탑 sync 충돌 정책 테스트
 node apps/desktop/scripts/test-sync-conflict.cjs
